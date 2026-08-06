@@ -46,10 +46,9 @@ discovering in Phase 4:
 1. **The globe unwraps into a flat map at ~zoom 5.** Globe projection switches
    to Mercator automatically once the camera passes the transition zoom
    (`GLOBE_ZOOM_THRESHOLD_MIN` is 5, with a blend up to ~6), and the atmosphere
-   and stars go with it. This is the single biggest behavioral decision in the
-   feature. Either accept the unwrap as a "zoom into the map" affordance, or
-   clamp it with `cameraBounds(CameraBounds(maxZoom: 5))` so the app is always a
-   globe. Pick before building Phase 5.
+   and stars go with it. Both behaviors are wanted, so this is built as a
+   configurable mode rather than a decision — see
+   [Zoom behavior toggle](#zoom-behavior-toggle).
 2. **Interaction is map-like, not trackball-like.** Dragging pans lat/lon and
    the view stays north-up; it does not tumble freely on an arbitrary axis.
    Pitch is limited at low zoom. For "spin the Earth, tap a place" this is
@@ -109,6 +108,7 @@ src/Trace/Trace/
 │   ├── GlobeView.swift         # the SwiftUI Map + style + annotations
 │   ├── GlobeViewModel.swift    # @Observable: viewport, markers, selection
 │   ├── GlobeStyle.swift        # atmosphere/projection tuning in one place
+│   ├── GlobeZoomMode.swift     # locked-to-globe vs. unwraps-to-map
 │   ├── GlobeMarker.swift       # Identifiable model: id, coordinate, title, kind
 │   └── MarkerView.swift        # the SwiftUI pin rendered per marker
 └── ContentView.swift           # hosts GlobeView
@@ -314,15 +314,73 @@ globe, disappear around the back, and tapping one selects it.
 - **Gesture trimming.** `.gestureOptions(GestureOptions)` — set
   `pitchEnabled = false` and `pinchRotateEnabled = false` if the globe should
   only spin and zoom. Programmatic camera changes still work when these are off.
-- **Zoom clamp.** If the globe should never unwrap into a flat map, apply
-  `.cameraBounds(CameraBounds(maxZoom: 5))` — see
-  [What Mapbox constrains](#what-mapbox-constrains).
+- **Zoom clamp.** Applied from the mode described in
+  [Zoom behavior toggle](#zoom-behavior-toggle).
 - **Ornaments.** `ornamentOptions` — the Mapbox logo and attribution must stay
   visible per the terms of service, but they can be repositioned.
 - **Frame rate.** `frameRate(range:preferred:)` to cap at 30fps for battery if
   idle rotation runs continuously.
 - **Accessibility.** Annotations need labels; the globe itself should expose a
   summary rather than being an opaque blob to VoiceOver.
+
+## Zoom behavior toggle
+
+Whether zooming in unwraps the globe into a flat Mercator map is a mode, not a
+decision. Both are supported and switchable.
+
+```swift
+/// What happens when the camera zooms past the globe → Mercator transition.
+enum GlobeZoomMode: String, CaseIterable, Identifiable {
+    /// The camera is clamped short of the transition. Always a sphere.
+    case lockedToGlobe
+    /// Zooming in unwraps the globe into a flat map. Mapbox's default.
+    case unwrapsToMap
+
+    var id: String { rawValue }
+
+    /// `nil` means unconstrained.
+    var maxZoom: Double? {
+        switch self {
+        // Just under GLOBE_ZOOM_THRESHOLD_MIN (5) so the camera never lands
+        // inside the globe→Mercator blend band.
+        case .lockedToGlobe: 4.9
+        case .unwrapsToMap:  nil
+        }
+    }
+}
+```
+
+`CameraBoundsOptions.maxZoom` is already optional, so applying the mode is a
+single modifier with no branching:
+
+```swift
+Map(viewport: $viewport) { ... }
+    .cameraBounds(CameraBoundsOptions(maxZoom: model.zoomMode.maxZoom))
+```
+
+**Default to `.lockedToGlobe`.** The feature is "a globe"; the flat map is the
+escape hatch, not the main event.
+
+Three other places have to honor the mode — this is where the toggle stops
+being one line:
+
+1. **Marker fly-to.** Clamp the target:
+   `min(desiredZoom, model.zoomMode.maxZoom ?? desiredZoom)`. Otherwise
+   selecting a marker in locked mode animates toward a zoom the camera bounds
+   will refuse, and the animation lands somewhere unintended.
+2. **Idle rotation.** Pointless once the map is flat. Pause auto-rotation when
+   zoom crosses ~5, regardless of mode — in locked mode it simply never fires.
+3. **Custom star field.** If Phase 3 route 2 is chosen (a SwiftUI star field
+   composited behind a transparent map) *and* the mode is `.unwrapsToMap`, the
+   stars will not fade out on their own the way the SDK's built-in ones do. They
+   are a separate view and will sit behind a flat map looking wrong. Fade them
+   manually against zoom, or pair route 2 with `.lockedToGlobe` only. Route 1
+   (built-in stars) has no such problem in either mode.
+
+Surface the toggle in a debug settings sheet during development so it can be
+evaluated on device without a rebuild. Whether it ships as a user-facing
+setting is a product call — most likely it does not, and one mode gets baked in
+once the feel is settled.
 
 ## Cost and licensing
 
@@ -376,9 +434,10 @@ not for convenience.
   entirely on it. Check whether that caveat still applies to the version SPM
   resolves; if it does, pin an exact version rather than a range, and expect
   minor-version upgrades to need a look.
-- **Zoom behavior is unresolved** — whether the globe clamps at zoom 5 or is
-  allowed to unwrap into a map is a product decision nobody has made yet, and it
-  changes what Phase 5 builds.
+- **Zoom behavior** — resolved as a toggle, defaulting to `.lockedToGlobe`. The
+  residual risk is the three call sites that must honor it (fly-to clamp,
+  rotation pause, star-field fade); a mode added later without updating those
+  produces subtle wrongness rather than an obvious break.
 - **Cold-launch over poor network** — no mitigation designed yet; see constraint
   3 above.
 - **Testing** — the map is hard to unit-test. Test `GlobeViewModel` (marker
@@ -387,7 +446,6 @@ not for convenience.
 
 ## Task checklist
 
-- [ ] Decide: does the globe clamp at zoom 5, or unwrap into a flat map?
 - [ ] Decide token storage (xcconfig recommended); add `Secrets.example.xcconfig`
 - [ ] Add `mapbox-maps-ios` 11.x via SPM; link `MapboxMaps`
 - [ ] `MapboxOptions.accessToken` wired up in `TraceApp`
@@ -396,7 +454,10 @@ not for convenience.
 - [ ] Star background dialed in (Phase 3)
 - [ ] `GlobeMarker`, `MarkerView`, `GlobeViewModel`, annotations, tap → selection (Phase 4)
 - [ ] Verify back-of-globe occlusion on device
-- [ ] Idle rotation + gesture/ornament/zoom-clamp config (Phase 5)
+- [ ] `GlobeZoomMode` + `cameraBounds`, defaulting to `.lockedToGlobe`
+- [ ] Mode honored in fly-to clamp, rotation pause, and star-field fade
+- [ ] Debug settings sheet exposing the mode for on-device evaluation
+- [ ] Idle rotation + gesture/ornament config (Phase 5)
 - [ ] Decide cold-launch fallback (bundled low-zoom image or offline tile pack)
 - [ ] `ContentView` hosts `GlobeView`; delete the tap-counter placeholder
 - [ ] Unit tests for `GlobeViewModel`
