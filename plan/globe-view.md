@@ -37,6 +37,35 @@ Fall back to RealityKit only if the Mapbox account/billing story is a blocker
 (see [Cost and licensing](#cost-and-licensing)) or if the design calls for a
 stylised, non-cartographic Earth. That fallback is sketched at the end.
 
+### What Mapbox constrains
+
+The SDK is a very good fit, but it is a *map engine wrapped onto a sphere*, not
+a 3D object viewer. Four consequences worth accepting deliberately rather than
+discovering in Phase 4:
+
+1. **The globe unwraps into a flat map at ~zoom 5.** Globe projection switches
+   to Mercator automatically once the camera passes the transition zoom
+   (`GLOBE_ZOOM_THRESHOLD_MIN` is 5, with a blend up to ~6), and the atmosphere
+   and stars go with it. This is the single biggest behavioral decision in the
+   feature. Either accept the unwrap as a "zoom into the map" affordance, or
+   clamp it with `cameraBounds(CameraBounds(maxZoom: 5))` so the app is always a
+   globe. Pick before building Phase 5.
+2. **Interaction is map-like, not trackball-like.** Dragging pans lat/lon and
+   the view stays north-up; it does not tumble freely on an arbitrary axis.
+   Pitch is limited at low zoom. For "spin the Earth, tap a place" this is
+   exactly right. For "toss the planet and let it wobble," it is not.
+3. **Tiles stream over the network.** Satellite imagery is fetched, not
+   bundled, so a cold launch on a bad connection shows a blurry or empty globe.
+   If the globe is the app's first screen, that is the first impression. Budget
+   for either a bundled low-zoom fallback image behind the map or a preloaded
+   offline tile pack for zoom 0–3.
+4. **The SDK is not small.** `MapboxMaps` adds meaningful binary weight to what
+   is currently a near-empty app. Fine for a real product, worth knowing if
+   Trace is meant to stay lightweight.
+
+None of these are reasons to avoid Mapbox for this feature. They are the shape
+of the tool.
+
 ## Prerequisites
 
 Two different Mapbox tokens are needed; they are not interchangeable.
@@ -90,6 +119,13 @@ tweaked a lot, and they shouldn't be tangled up with view code.
 
 ## Implementation phases
 
+> **The code below is illustrative, not compiled.** There is no macOS toolchain
+> in the environment this plan was written in, so no sample here has been built
+> against the SDK. Treat the shapes as correct and the exact signatures as
+> things to confirm against the version SPM actually resolves — particularly the
+> `Atmosphere` builder methods, whose declarative-DSL spellings differ from the
+> imperative struct's properties.
+
 ### Phase 1 — Dependency and a map on screen
 
 Add `https://github.com/mapbox/mapbox-maps-ios` via
@@ -118,8 +154,11 @@ import MapboxMaps
 
 struct GlobeView: View {
     var body: some View {
-        Map(initialViewport: .camera(center: .chicago, zoom: 0.8))
-            .ignoresSafeArea()
+        Map(initialViewport: .camera(
+            center: CLLocationCoordinate2D(latitude: 41.8781, longitude: -87.6298),
+            zoom: 0.8
+        ))
+        .ignoresSafeArea()
     }
 }
 ```
@@ -272,8 +311,12 @@ globe, disappear around the back, and tapping one selects it.
   viewport's center longitude each tick, wrapped in `withViewportAnimation(.linear)`.
   Stop it on first user interaction — `transitionsToIdleUponUserInteraction(false)`
   keeps the SDK from fighting the manual camera.
-- **Gesture trimming.** Disable pitch and rotation via `GestureOptions` if the
-  globe should only spin and zoom.
+- **Gesture trimming.** `.gestureOptions(GestureOptions)` — set
+  `pitchEnabled = false` and `pinchRotateEnabled = false` if the globe should
+  only spin and zoom. Programmatic camera changes still work when these are off.
+- **Zoom clamp.** If the globe should never unwrap into a flat map, apply
+  `.cameraBounds(CameraBounds(maxZoom: 5))` — see
+  [What Mapbox constrains](#what-mapbox-constrains).
 - **Ornaments.** `ornamentOptions` — the Mapbox logo and attribution must stay
   visible per the terms of service, but they can be repositioned.
 - **Frame rate.** `frameRate(range:preferred:)` to cap at 30fps for battery if
@@ -328,12 +371,23 @@ not for convenience.
   needed.
 - **Deployment target** — stays at 17.0 for the Mapbox path, moves to 18.0 for
   the RealityKit path.
+- **The SwiftUI API has carried an "experimental" label** — Mapbox shipped it in
+  v11 with a note that it may change until it stabilizes. This plan rests
+  entirely on it. Check whether that caveat still applies to the version SPM
+  resolves; if it does, pin an exact version rather than a range, and expect
+  minor-version upgrades to need a look.
+- **Zoom behavior is unresolved** — whether the globe clamps at zoom 5 or is
+  allowed to unwrap into a map is a product decision nobody has made yet, and it
+  changes what Phase 5 builds.
+- **Cold-launch over poor network** — no mitigation designed yet; see constraint
+  3 above.
 - **Testing** — the map is hard to unit-test. Test `GlobeViewModel` (marker
   add/remove/select, coordinate math, rotation stepping) and leave rendering to
   manual/snapshot checks.
 
 ## Task checklist
 
+- [ ] Decide: does the globe clamp at zoom 5, or unwrap into a flat map?
 - [ ] Decide token storage (xcconfig recommended); add `Secrets.example.xcconfig`
 - [ ] Add `mapbox-maps-ios` 11.x via SPM; link `MapboxMaps`
 - [ ] `MapboxOptions.accessToken` wired up in `TraceApp`
@@ -342,7 +396,8 @@ not for convenience.
 - [ ] Star background dialed in (Phase 3)
 - [ ] `GlobeMarker`, `MarkerView`, `GlobeViewModel`, annotations, tap → selection (Phase 4)
 - [ ] Verify back-of-globe occlusion on device
-- [ ] Idle rotation + gesture/ornament config (Phase 5)
+- [ ] Idle rotation + gesture/ornament/zoom-clamp config (Phase 5)
+- [ ] Decide cold-launch fallback (bundled low-zoom image or offline tile pack)
 - [ ] `ContentView` hosts `GlobeView`; delete the tap-counter placeholder
 - [ ] Unit tests for `GlobeViewModel`
 - [ ] README: token setup steps
