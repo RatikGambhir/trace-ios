@@ -77,8 +77,14 @@ cargo clippy --all-targets -- -D warnings
 
 ## Deployment
 
-Deployed on Railway from this repo with the service root set to `/server`,
-built from the `Dockerfile` here.
+Deployed on Railway (project `trace`, service `api`) from this repo with the
+service root set to `/server`, built from the `Dockerfile` here.
+
+Base URL: <https://api-production-946d.up.railway.app>
+
+`DATABASE_URL` is a `${{Postgres.DATABASE_URL}}` reference, so the API reaches
+the database over Railway's private network — the database does not need to be
+publicly exposed for the API to work.
 
 ## Notes
 
