@@ -1,5 +1,5 @@
 [package]
-name = "trace-api"
+name = "trace-server"
 version = "0.1.0"
 edition = "2021"
 
@@ -25,6 +25,9 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["serde", "v4"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
 
 [profile.release]
 strip = true

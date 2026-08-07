@@ -17,10 +17,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 app
 
-COPY --from=builder /app/target/release/trace-api /usr/local/bin/trace-api
+COPY --from=builder /app/target/release/trace-server /usr/local/bin/trace-server
 
 USER app
 ENV PORT=8080
 EXPOSE 8080
 
-CMD ["trace-api"]
+CMD ["trace-server"]

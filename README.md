@@ -1,15 +1,31 @@
 # trace-ios
 
-A basic SwiftUI iOS app.
+Trace: a SwiftUI iOS app and its Axum backend.
 
 ## Layout
 
-- `src/Trace/` — the Xcode project and app source.
-- `server/` — the Axum backend API. See [server/README.md](server/README.md).
+- `src/mobile-app/` — the SwiftUI iOS app (Xcode project).
+- `src/trace-server/` — the Axum HTTP backend.
 - `db/migrations/` — SQL migrations for the Postgres database.
 - `plan/` — planning and design docs.
 
-## Running it
+## Mobile app
 
-Open `src/Trace/Trace.xcodeproj` in Xcode 16 or later, pick an iOS simulator,
-and run. Deployment target is iOS 17.0.
+Open `src/mobile-app/Trace.xcodeproj` in Xcode 16 or later, pick an iOS
+simulator, and run. Deployment target is iOS 17.0.
+
+## Server
+
+```sh
+cd src/trace-server
+export DATABASE_URL='postgres://user:pass@host:5432/railway'
+cargo run
+```
+
+Listens on `0.0.0.0:8080` by default (`PORT` overrides it). A reachable Postgres
+is required at startup. See `src/trace-server/README.md` for endpoints and
+configuration, and `db/migrations/` for the schema.
+
+Deployed on Railway at <https://api-production-946d.up.railway.app>.
+
+The two are not wired together yet — the app does not call the server.

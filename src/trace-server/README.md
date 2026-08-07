@@ -1,4 +1,4 @@
-# trace-api
+# trace-server
 
 Axum service backing the Trace app. It owns the `users` table in the Railway
 `trace` Postgres database.
@@ -58,7 +58,7 @@ API keys are 256 bits from the OS CSPRNG, prefixed `trace_sk_`.
 | -------------- | -------- | ---------------------------------------------- |
 | `DATABASE_URL` | yes      | On Railway, set to `${{Postgres.DATABASE_URL}}` |
 | `PORT`         | no       | Defaults to `8080`; Railway injects it          |
-| `RUST_LOG`     | no       | Defaults to `trace_api=info,tower_http=info`    |
+| `RUST_LOG`     | no       | Defaults to `trace_server=info,tower_http=info` |
 
 ## Running locally
 
@@ -67,7 +67,7 @@ export DATABASE_URL='postgres://user:pass@host:5432/railway'
 cargo run
 ```
 
-The schema is not created at startup — apply `db/migrations/0001_create_users.sql`
+The schema is not created at startup — apply the migrations in `db/migrations/`
 first.
 
 ```sh
@@ -75,10 +75,13 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
+The router tests drive `app()` directly with `oneshot`, using a lazily-connected
+pool, so `cargo test` needs no database.
+
 ## Deployment
 
 Deployed on Railway (project `trace`, service `api`) from this repo with the
-service root set to `/server`, built from the `Dockerfile` here.
+service root set to `/src/trace-server`, built from the `Dockerfile` here.
 
 Base URL: <https://api-production-946d.up.railway.app>
 
