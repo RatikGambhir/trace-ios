@@ -215,6 +215,37 @@ API keys are 256 bits from the OS CSPRNG, prefixed `trace_sk_`.
 | `PORT`         | no       | Defaults to `8080`; Railway injects it          |
 | `RUST_LOG`     | no       | Defaults to `trace_server=info,tower_http=info` |
 
+## Layout
+
+```text
+src/
+├── main.rs            configuration, wiring, serving
+├── router.rs          route table and middleware stack
+├── handlers/          HTTP in, status code out — no logic of their own
+├── services/          transactions, idempotency, derived values
+├── repositories/      SQL, on a connection the caller owns
+├── models/            request and row types, and their validation
+└── core/              error shape, geometry, crypto, validation helpers, state
+```
+
+Each layer only calls the one below it. Repositories take a `&mut PgConnection`
+rather than a pool, which is what lets a journey write nine tables atomically:
+the service opens one transaction and hands the same connection to each
+repository in turn.
+
+Tests sit next to the code they cover, as `<file>_tests.rs` — `models/journey.rs`
+is tested by `models/journey_tests.rs`, wired in with:
+
+```rust
+#[cfg(test)]
+#[path = "journey_tests.rs"]
+mod tests;
+```
+
+They stay unit tests rather than moving to a top-level `tests/` directory, so
+they keep access to private items and need no visibility widened just to be
+tested.
+
 ## Running locally
 
 ```sh

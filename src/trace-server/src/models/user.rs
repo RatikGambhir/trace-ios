@@ -1,17 +1,11 @@
-use argon2::{
-    password_hash::{
-        rand_core::{OsRng, RngCore},
-        PasswordHasher, SaltString,
-    },
-    Argon2,
-};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+//! Users: the request body, the row, and the validation between them.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use crate::error::ApiError;
+use crate::core::error::ApiError;
 
 const MAX_NAME_LEN: usize = 100;
 const MAX_ROLE_LEN: usize = 50;
@@ -21,7 +15,6 @@ const MIN_PASSWORD_LEN: usize = 8;
 const MAX_PASSWORD_LEN: usize = 1024;
 
 const DEFAULT_ROLE: &str = "user";
-const API_KEY_PREFIX: &str = "trace_sk_";
 
 /// Body of `POST /api/v1/users`.
 #[derive(Debug, Deserialize)]
@@ -116,87 +109,6 @@ impl CreateUserRequest {
     }
 }
 
-/// Generate an opaque API key: a prefix for greppability plus 256 bits of entropy.
-pub fn generate_api_key() -> String {
-    let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
-    format!("{API_KEY_PREFIX}{}", URL_SAFE_NO_PAD.encode(bytes))
-}
-
-/// Hash a password with Argon2id using a fresh random salt. The returned PHC
-/// string carries the salt and parameters, so verification needs nothing else.
-///
-/// This is CPU-bound by design — call it from `spawn_blocking`.
-pub fn hash_password(password: &str) -> anyhow::Result<String> {
-    let salt = SaltString::generate(&mut OsRng);
-    Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map(|hash| hash.to_string())
-        .map_err(|err| anyhow::anyhow!("failed to hash password: {err}"))
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn request(first: &str, last: &str, password: &str) -> CreateUserRequest {
-        CreateUserRequest {
-            first_name: first.to_string(),
-            last_name: last.to_string(),
-            role: None,
-            password: password.to_string(),
-        }
-    }
-
-    #[test]
-    fn trims_names_and_defaults_the_role() {
-        let validated = request("  Ada  ", " Lovelace ", "correct horse")
-            .validate()
-            .expect("should be valid");
-
-        assert_eq!(validated.first_name, "Ada");
-        assert_eq!(validated.last_name, "Lovelace");
-        assert_eq!(validated.role, "user");
-    }
-
-    #[test]
-    fn rejects_blank_names_and_short_passwords_together() {
-        // Deliberately no `Debug` on `ValidatedUser` — it carries a plaintext
-        // password — so match the success arm explicitly rather than format it.
-        let errors = match request("   ", "Lovelace", "short").validate() {
-            Err(ApiError::Validation(errors)) => errors,
-            Err(other) => panic!("expected validation errors, got {other:?}"),
-            Ok(_) => panic!("expected validation to fail"),
-        };
-
-        assert_eq!(errors.len(), 2);
-        assert!(errors.iter().any(|e| e.contains("first_name")));
-        assert!(errors.iter().any(|e| e.contains("password")));
-    }
-
-    #[test]
-    fn blank_role_falls_back_to_the_default() {
-        let mut req = request("Ada", "Lovelace", "correct horse");
-        req.role = Some("   ".to_string());
-
-        assert_eq!(req.validate().expect("should be valid").role, "user");
-    }
-
-    #[test]
-    fn api_keys_are_prefixed_and_unique() {
-        let first = generate_api_key();
-        let second = generate_api_key();
-
-        assert!(first.starts_with(API_KEY_PREFIX));
-        assert_ne!(first, second);
-    }
-
-    #[test]
-    fn hashes_are_salted_per_call() {
-        let first = hash_password("correct horse").expect("hashing works");
-        let second = hash_password("correct horse").expect("hashing works");
-
-        assert!(first.starts_with("$argon2id$"));
-        assert_ne!(first, second);
-    }
-}
+#[path = "user_tests.rs"]
+mod tests;
