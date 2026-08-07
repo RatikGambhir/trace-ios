@@ -45,6 +45,17 @@ Errors come back as `{"error": "...", "details": [...]}` — `422` for validatio
 failures, `409` on a unique-constraint collision, `500` for anything else
 (database detail is logged, never returned).
 
+## Schema
+
+Migrations live in `db/migrations/` and are applied manually — the server does
+not run them at startup.
+
+| Migration | Contents |
+| --------- | -------- |
+| `0001_create_users.sql` | `users`, plus the shared `set_updated_at()` trigger function |
+| `0002_create_flights_schema.sql` | `airports`, `airlines`, `flights` |
+| `0003_add_updated_at_triggers.sql` | `updated_at` triggers on the three tables from 0002 |
+
 ## Passwords and keys
 
 Passwords are hashed with Argon2id and a per-user random salt, on a blocking
