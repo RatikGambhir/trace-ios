@@ -10,6 +10,13 @@
 --
 -- Adding a mode later is one new table plus one value in the `mode` CHECK. No
 -- existing row changes, and no nullable column is added to anything.
+--
+-- Wrapped in a transaction because Postgres DDL is transactional: applied by a
+-- bare `psql -f`, which is otherwise autocommit, a failure half-way would leave
+-- a partial schema. This way it either lands whole or not at all, and a failed
+-- run can simply be repeated.
+
+BEGIN;
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -373,3 +380,5 @@ CREATE TRIGGER segment_drives_set_updated_at
 BEFORE UPDATE ON segment_drives
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at();
+
+COMMIT;

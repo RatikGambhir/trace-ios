@@ -5,6 +5,10 @@
 -- — so replaying its creation is unambiguous. A journey has no such key: two
 -- trips with the same title and dates can both be real. So idempotency here is
 -- opt-in, on a key the client chooses.
+--
+-- Transactional for the same reason as 0004: whole, or not at all.
+
+BEGIN;
 
 ALTER TABLE journeys
     ADD COLUMN idempotency_key VARCHAR(64);
@@ -20,3 +24,5 @@ CREATE UNIQUE INDEX journeys_user_idempotency_key
 CREATE UNIQUE INDEX vehicles_user_nickname_key
     ON vehicles (user_id, nickname)
     WHERE nickname IS NOT NULL;
+
+COMMIT;
