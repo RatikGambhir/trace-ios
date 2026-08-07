@@ -132,6 +132,39 @@ not run them at startup.
 | `0001_create_users.sql` | `users`, plus the shared `set_updated_at()` trigger function |
 | `0002_create_flights_schema.sql` | `airports`, `airlines`, `flights` |
 | `0003_add_updated_at_triggers.sql` | `updated_at` triggers on the three tables from 0002 |
+| `0004_create_journeys_schema.sql` | `places`, `vehicles`, `journeys`, `journey_segments`, the per-mode `segment_*` tables, and the `journey_totals` view |
+
+### Journeys
+
+A journey is one user's trip, made of ordered segments. Everything every mode
+of transport has — when, where, how long, how far — lives on `journey_segments`,
+so a trip total is one `SUM` across flights, drives, and anything added later:
+
+```sql
+SELECT * FROM journey_totals WHERE journey_id = $1;
+```
+
+Each mode that needs more columns gets its own small table keyed on the segment:
+
+- `segment_flights` → references `flights(id)`, plus seat, cabin, and booking
+  reference. A flight is shared — one `flights` row serves every user aboard —
+  so this table holds only what is personal to the traveller. Flight number and
+  schedule stay on `flights`.
+- `segment_drives` → references `vehicles(id)`, plus role and route. A drive has
+  no shared counterpart, so its details live here outright.
+- Modes with nothing extra to say (`walk`, `bike`, `bus`, …) need no subtype row
+  at all.
+
+Subtype tables foreign-key `(segment_id, mode)` against
+`journey_segments (id, mode)`, so a drive cannot attach to a flight segment, and
+a segment's mode cannot be changed while its details exist. Adding a mode later
+is one new table plus one value in the `mode` CHECK.
+
+`places` is the endpoint of any segment — an airport, an address, a landmark —
+and is what the globe view reads markers from. Airports are mirrored into it
+automatically by the `airports_sync_place` trigger on insert and update, so
+`POST /api/v1/flights` populates `places` as a side effect and no application
+code has to remember to.
 
 ## Passwords and keys
 
