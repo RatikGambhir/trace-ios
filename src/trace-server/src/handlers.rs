@@ -10,9 +10,9 @@ use uuid::Uuid;
 
 use crate::{
     error::ApiError,
-    flights::{
-        distance_between, insert_flight, resolve_airline, resolve_airport, CreateFlightRequest,
-        Flight, FlightUpsert,
+    journeys::{
+        ensure_user_exists, insert_journey, insert_segment, load_journey, CreateJourneyRequest,
+        JourneyResponse, JourneyUpsert, PlaceCache,
     },
     models::{generate_api_key, hash_password, CreateUserRequest, CreateUserResponse, User},
     state::AppState,
@@ -76,58 +76,72 @@ pub async fn create_user(
     ))
 }
 
-/// `POST /api/v1/flights` — record a flight.
+/// `POST /api/v1/journeys` — record a trip and everything it is made of.
 ///
-/// The airline and both airports are resolved by their IATA codes and created
-/// if we have not seen them before, `distance_miles` is derived from the stored
-/// airport coordinates, and the whole thing runs in one transaction: either the
-/// flight and everything it references land together, or nothing does.
+/// One request writes the journey, its segments, the places at either end of
+/// each one, and — per mode — the airport, airline, and flight behind a flight
+/// segment, or the vehicle behind a drive. All of it in a single transaction,
+/// so either the whole trip lands or none of it does.
 ///
-/// Replaying an identical request is safe. `201` means the flight was created,
-/// `200` means an earlier request already created it and the stored row is
-/// returned unchanged.
-pub async fn create_flight(
+/// `201` means the journey was created. `200` means an earlier request with the
+/// same `idempotency_key` already created it and the stored trip is returned
+/// unchanged.
+pub async fn create_journey(
     State(state): State<Arc<AppState>>,
-    Json(payload): Json<CreateFlightRequest>,
-) -> Result<(StatusCode, Json<Flight>), ApiError> {
-    let validated = payload.validate()?;
+    Json(payload): Json<CreateJourneyRequest>,
+) -> Result<(StatusCode, Json<JourneyResponse>), ApiError> {
+    let journey = payload.validate()?;
 
     // Dropping `tx` without committing rolls back, so every `?` below leaves
     // the database untouched.
     let mut tx = state.db.begin().await?;
 
-    let origin = resolve_airport(&mut tx, &validated.origin, "origin").await?;
-    let destination = resolve_airport(&mut tx, &validated.destination, "destination").await?;
-    let airline_id = resolve_airline(&mut tx, &validated.airline).await?;
+    ensure_user_exists(&mut tx, journey.user_id).await?;
 
-    let distance_miles = distance_between(&origin, &destination);
+    // The journey row goes in first. A replay conflicts here, before any
+    // segment or reference row is touched, so it costs one statement and
+    // creates nothing.
+    let journey_id = match insert_journey(&mut tx, &journey).await? {
+        JourneyUpsert::AlreadyExists(id) => {
+            let response = load_journey(&mut tx, id).await?;
+            tx.commit().await?;
 
-    let upsert = insert_flight(
-        &mut tx,
-        &validated,
-        airline_id,
-        origin.id,
-        destination.id,
-        distance_miles,
-    )
-    .await?;
+            tracing::info!(journey_id = %id, "journey already recorded");
+            return Ok((StatusCode::OK, Json(response)));
+        }
+        JourneyUpsert::Created(id) => id,
+    };
+
+    // Shared across the segments so a waypoint two legs both name — the airport
+    // one leg ends at and the next begins from — resolves to a single place.
+    let mut places = PlaceCache::default();
+
+    for segment in &journey.segments {
+        insert_segment(&mut tx, &mut places, journey_id, journey.user_id, segment).await?;
+    }
+
+    let response = load_journey(&mut tx, journey_id).await?;
 
     tx.commit().await?;
 
-    Ok(match upsert {
-        FlightUpsert::Created(flight) => {
-            tracing::info!(
-                flight_id = %flight.id,
-                distance_miles = ?flight.distance_miles,
-                "created flight"
-            );
-            (StatusCode::CREATED, Json(flight))
-        }
-        FlightUpsert::AlreadyExists(flight) => {
-            tracing::info!(flight_id = %flight.id, "flight already recorded");
-            (StatusCode::OK, Json(flight))
-        }
-    })
+    tracing::info!(
+        journey_id = %journey_id,
+        segments = response.segments.len(),
+        distance_miles = response.totals.total_distance_miles,
+        "created journey"
+    );
+
+    Ok((StatusCode::CREATED, Json(response)))
+}
+
+/// `GET /api/v1/journeys/{id}` — the trip, its segments, and their details.
+pub async fn get_journey(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<JourneyResponse>, ApiError> {
+    let mut conn = state.db.acquire().await?;
+
+    Ok(Json(load_journey(&mut conn, id).await?))
 }
 
 /// `GET /api/v1/users/{id}` — read back a user without any secret columns.

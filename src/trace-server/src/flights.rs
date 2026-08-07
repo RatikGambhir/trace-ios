@@ -1,11 +1,18 @@
-//! `POST /api/v1/flights`: request types, validation, and the database work
-//! behind them.
+//! Flights: the shared, real-world leg. Types, validation, and the database
+//! work behind a flight segment of a journey.
 //!
-//! Three rules shape this module:
+//! A flight is not owned by a user — AA100 on a given day is one row in
+//! `flights` however many people were aboard. So this module resolves a flight
+//! to its canonical row and leaves everything personal (seat, cabin, booking
+//! reference) to `segment_flights`, over in [`crate::journeys`], which is what
+//! `POST /api/v1/journeys` drives.
 //!
-//! * **Atomic** — airports, airline, and flight are written in one transaction,
-//!   so a failure part-way through leaves no half-created reference rows.
-//! * **Idempotent** — replaying the same request returns the flight that is
+//! Three rules shape it:
+//!
+//! * **Atomic** — airports, airline, and flight join whatever transaction the
+//!   caller opened, so a failure part-way through leaves no half-created
+//!   reference rows.
+//! * **Idempotent** — resolving the same flight twice returns the row that is
 //!   already stored instead of erroring or duplicating it.
 //! * **Derived distance** — `distance_miles` is computed from the stored airport
 //!   coordinates, never taken from the caller.
@@ -83,11 +90,11 @@ pub struct AirlineInput {
     pub name: Option<String>,
 }
 
-/// Body of `POST /api/v1/flights`.
+/// A flight as the caller describes it, nested inside a journey segment.
 ///
 /// `distance_miles` is deliberately absent — the server derives it.
 #[derive(Debug, Deserialize)]
-pub struct CreateFlightRequest {
+pub struct FlightInput {
     pub airline: AirlineInput,
     pub flight_number: String,
     pub origin: AirportInput,
@@ -159,7 +166,7 @@ pub struct ValidatedAirline {
     pub name: Option<String>,
 }
 
-/// A trimmed, range-checked `CreateFlightRequest`.
+/// A trimmed, range-checked `FlightInput`.
 pub struct ValidatedFlight {
     pub airline: ValidatedAirline,
     pub flight_number: String,
@@ -206,23 +213,40 @@ pub fn distance_between(origin: &ResolvedAirport, destination: &ResolvedAirport)
     Some(great_circle_miles(from, to).round() as i32)
 }
 
-impl CreateFlightRequest {
-    pub fn validate(self) -> Result<ValidatedFlight, ApiError> {
-        let mut errors = Vec::new();
+/// Join a nesting prefix to a field name. A flight now arrives inside a journey
+/// segment, so its errors have to say *which* segment: `segments[2].flight.origin`
+/// rather than a bare `origin`.
+pub fn field(prefix: &str, name: &str) -> String {
+    if prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{prefix}.{name}")
+    }
+}
 
-        let airline = self.airline.validate(&mut errors);
-        let origin = self.origin.validate("origin", &mut errors);
-        let destination = self.destination.validate("destination", &mut errors);
+impl FlightInput {
+    /// Check and normalise, collecting into a caller-owned error list so a
+    /// journey can report problems across every segment at once.
+    ///
+    /// `prefix` names where this flight sits in the request body — pass `""`
+    /// when it stands alone.
+    pub fn validate_into(self, prefix: &str, errors: &mut Vec<String>) -> ValidatedFlight {
+        let airline = self.airline.validate(prefix, errors);
+        let origin = self.origin.validate(&field(prefix, "origin"), errors);
+        let destination = self
+            .destination
+            .validate(&field(prefix, "destination"), errors);
 
         let flight_number = self.flight_number.trim().to_ascii_uppercase();
+        let flight_number_field = field(prefix, "flight_number");
         if flight_number.is_empty() {
-            errors.push("flight_number must not be empty".to_string());
+            errors.push(format!("{flight_number_field} must not be empty"));
         } else if flight_number.chars().count() > MAX_FLIGHT_NUMBER_LEN {
             errors.push(format!(
-                "flight_number must be at most {MAX_FLIGHT_NUMBER_LEN} characters"
+                "{flight_number_field} must be at most {MAX_FLIGHT_NUMBER_LEN} characters"
             ));
         } else if !flight_number.chars().all(|c| c.is_ascii_alphanumeric()) {
-            errors.push("flight_number must be alphanumeric".to_string());
+            errors.push(format!("{flight_number_field} must be alphanumeric"));
         }
 
         let status = self
@@ -232,70 +256,79 @@ impl CreateFlightRequest {
             .unwrap_or_else(|| DEFAULT_STATUS.to_string());
         if !FLIGHT_STATUSES.contains(&status.as_str()) {
             errors.push(format!(
-                "status must be one of: {}",
+                "{} must be one of: {}",
+                field(prefix, "status"),
                 FLIGHT_STATUSES.join(", ")
             ));
         }
 
         if self.scheduled_arrival_at <= self.scheduled_departure_at {
-            errors.push("scheduled_arrival_at must be after scheduled_departure_at".to_string());
+            errors.push(format!(
+                "{} must be after {}",
+                field(prefix, "scheduled_arrival_at"),
+                field(prefix, "scheduled_departure_at")
+            ));
         }
 
         if let (Some(departure), Some(arrival)) = (self.actual_departure_at, self.actual_arrival_at)
         {
             if arrival <= departure {
-                errors.push("actual_arrival_at must be after actual_departure_at".to_string());
+                errors.push(format!(
+                    "{} must be after {}",
+                    field(prefix, "actual_arrival_at"),
+                    field(prefix, "actual_departure_at")
+                ));
             }
         }
 
         // Mirrors `flights_origin_destination_check`; caught here so the caller
         // gets a named field rather than a constraint name.
         if origin.iata_code == destination.iata_code {
-            errors.push("origin and destination must be different airports".to_string());
+            errors.push(format!(
+                "{} and {} must be different airports",
+                field(prefix, "origin"),
+                field(prefix, "destination")
+            ));
         }
 
         let departure_terminal = optional_text(
             self.departure_terminal,
-            "departure_terminal",
+            &field(prefix, "departure_terminal"),
             MAX_TERMINAL_OR_GATE_LEN,
-            &mut errors,
+            errors,
         );
         let departure_gate = optional_text(
             self.departure_gate,
-            "departure_gate",
+            &field(prefix, "departure_gate"),
             MAX_TERMINAL_OR_GATE_LEN,
-            &mut errors,
+            errors,
         );
         let arrival_terminal = optional_text(
             self.arrival_terminal,
-            "arrival_terminal",
+            &field(prefix, "arrival_terminal"),
             MAX_TERMINAL_OR_GATE_LEN,
-            &mut errors,
+            errors,
         );
         let arrival_gate = optional_text(
             self.arrival_gate,
-            "arrival_gate",
+            &field(prefix, "arrival_gate"),
             MAX_TERMINAL_OR_GATE_LEN,
-            &mut errors,
+            errors,
         );
         let aircraft_type = optional_text(
             self.aircraft_type,
-            "aircraft_type",
+            &field(prefix, "aircraft_type"),
             MAX_AIRCRAFT_TYPE_LEN,
-            &mut errors,
+            errors,
         );
         let aircraft_registration = optional_text(
             self.aircraft_registration,
-            "aircraft_registration",
+            &field(prefix, "aircraft_registration"),
             MAX_AIRCRAFT_REGISTRATION_LEN,
-            &mut errors,
+            errors,
         );
 
-        if !errors.is_empty() {
-            return Err(ApiError::Validation(errors));
-        }
-
-        Ok(ValidatedFlight {
+        ValidatedFlight {
             airline,
             flight_number,
             origin,
@@ -311,12 +344,12 @@ impl CreateFlightRequest {
             arrival_gate,
             aircraft_type,
             aircraft_registration,
-        })
+        }
     }
 }
 
 impl AirportInput {
-    fn validate(self, field: &str, errors: &mut Vec<String>) -> ValidatedAirport {
+    pub(crate) fn validate(self, field: &str, errors: &mut Vec<String>) -> ValidatedAirport {
         let iata_code = fixed_code(&self.iata_code, &format!("{field}.iata_code"), 3, errors);
         let icao_code = self
             .icao_code
@@ -366,16 +399,18 @@ impl AirportInput {
 }
 
 impl AirlineInput {
-    fn validate(self, errors: &mut Vec<String>) -> ValidatedAirline {
+    fn validate(self, prefix: &str, errors: &mut Vec<String>) -> ValidatedAirline {
+        let prefix = field(prefix, "airline");
+
         ValidatedAirline {
-            iata_code: fixed_code(&self.iata_code, "airline.iata_code", 2, errors),
+            iata_code: fixed_code(&self.iata_code, &field(&prefix, "iata_code"), 2, errors),
             icao_code: self
                 .icao_code
                 .as_deref()
                 .map(|code| code.trim())
                 .filter(|code| !code.is_empty())
-                .map(|code| fixed_code(code, "airline.icao_code", 3, errors)),
-            name: optional_text(self.name, "airline.name", MAX_NAME_LEN, errors),
+                .map(|code| fixed_code(code, &field(&prefix, "icao_code"), 3, errors)),
+            name: optional_text(self.name, &field(&prefix, "name"), MAX_NAME_LEN, errors),
         }
     }
 }
@@ -695,8 +730,8 @@ mod tests {
         }
     }
 
-    fn request() -> CreateFlightRequest {
-        CreateFlightRequest {
+    fn request() -> FlightInput {
+        FlightInput {
             airline: AirlineInput {
                 iata_code: "aa".to_string(),
                 icao_code: Some("aal".to_string()),
@@ -719,17 +754,19 @@ mod tests {
         }
     }
 
-    fn errors(request: CreateFlightRequest) -> Vec<String> {
-        match request.validate() {
-            Err(ApiError::Validation(errors)) => errors,
-            Err(other) => panic!("expected validation errors, got {other:?}"),
-            Ok(_) => panic!("expected validation to fail"),
-        }
+    /// Validate standalone (no journey prefix) and demand failure.
+    fn errors(request: FlightInput) -> Vec<String> {
+        let mut errors = Vec::new();
+        request.validate_into("", &mut errors);
+        assert!(!errors.is_empty(), "expected validation to fail");
+        errors
     }
 
     #[test]
     fn normalises_codes_and_defaults_the_status() {
-        let flight = request().validate().expect("should be valid");
+        let mut errors = Vec::new();
+        let flight = request().validate_into("", &mut errors);
+        assert!(errors.is_empty(), "expected no errors, got {errors:?}");
 
         assert_eq!(flight.airline.iata_code, "AA");
         assert_eq!(flight.airline.icao_code.as_deref(), Some("AAL"));

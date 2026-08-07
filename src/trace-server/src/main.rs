@@ -2,6 +2,7 @@ mod error;
 mod flights;
 mod geo;
 mod handlers;
+mod journeys;
 mod models;
 mod state;
 
@@ -9,18 +10,23 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::Context;
 use axum::{
+    http::StatusCode,
     routing::{get, post},
     Router,
 };
 use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, signal};
 use tower::ServiceBuilder;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{cors::CorsLayer, timeout::TimeoutLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use crate::state::AppState;
 
 const DEFAULT_PORT: u16 = 8080;
+
+/// Ceiling on a single request, so one stuck transaction cannot pin a pool
+/// connection for the life of the process.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -70,7 +76,8 @@ fn app(state: Arc<AppState>) -> Router {
     let api = Router::new()
         .route("/users", post(handlers::create_user))
         .route("/users/{id}", get(handlers::get_user))
-        .route("/flights", post(handlers::create_flight));
+        .route("/journeys", post(handlers::create_journey))
+        .route("/journeys/{id}", get(handlers::get_journey));
 
     Router::new()
         .route("/health", get(handlers::health))
@@ -79,6 +86,13 @@ fn app(state: Arc<AppState>) -> Router {
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
+                // A journey POST can touch a lot of rows in one transaction;
+                // cap it so one slow request cannot hold a pool connection open
+                // indefinitely.
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    REQUEST_TIMEOUT,
+                ))
                 .layer(CorsLayer::permissive()),
         )
         .with_state(state)
@@ -114,10 +128,7 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{
-        body::Body,
-        http::{Request, StatusCode},
-    };
+    use axum::{body::Body, http::Request};
     use tower::ServiceExt;
 
     /// A pool that is never actually connected. Enough to build the router, and
@@ -178,21 +189,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_flight_rejects_an_invalid_payload_before_opening_a_transaction() {
+    async fn create_journey_rejects_an_invalid_payload_before_opening_a_transaction() {
         let response = app(test_state())
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/api/v1/flights")
+                    .uri("/api/v1/journeys")
                     .header("content-type", "application/json")
                     .body(Body::from(
                         r#"{
-                            "airline": {"iata_code": "AA", "name": "American Airlines"},
-                            "flight_number": "100",
-                            "origin": {"iata_code": "JFK", "name": "Kennedy"},
-                            "destination": {"iata_code": "JFK", "name": "Kennedy"},
-                            "scheduled_departure_at": "2026-08-10T22:00:00Z",
-                            "scheduled_arrival_at": "2026-08-10T21:00:00Z"
+                            "user_id": "00000000-0000-0000-0000-000000000001",
+                            "title": "",
+                            "segments": [
+                                {"mode": "flight"},
+                                {"mode": "walk", "drive": {"role": "driver"}}
+                            ]
                         }"#,
                     ))
                     .unwrap(),
@@ -207,8 +218,20 @@ mod tests {
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["error"], "validation_failed");
-        // Same origin and destination, and an arrival before the departure.
-        assert_eq!(body["details"].as_array().unwrap().len(), 2);
+
+        // A blank title, a flight segment with no flight, and drive details on
+        // a walk — all three, from one request, before any connection is taken.
+        let details = body["details"].as_array().unwrap();
+        assert_eq!(details.len(), 3);
+        assert!(details
+            .iter()
+            .any(|d| d.as_str().unwrap().contains("title")));
+        assert!(details
+            .iter()
+            .any(|d| d.as_str().unwrap().starts_with("segments[0].flight")));
+        assert!(details
+            .iter()
+            .any(|d| d.as_str().unwrap().starts_with("segments[1].drive")));
     }
 
     #[tokio::test]
