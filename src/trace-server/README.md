@@ -1,44 +1,107 @@
 # trace-server
 
-A basic [Axum](https://github.com/tokio-rs/axum) backend for Trace.
-
-## Running
-
-```sh
-cargo run
-```
-
-Listens on `127.0.0.1:3000` by default. Override with `TRACE_SERVER_ADDR`:
-
-```sh
-TRACE_SERVER_ADDR=0.0.0.0:8080 cargo run
-```
-
-Log level comes from `RUST_LOG` and defaults to
-`trace_server=debug,tower_http=debug`.
+Axum service backing the Trace app. It owns the `users` table in the Railway
+`trace` Postgres database.
 
 ## Endpoints
 
-| Method | Path      | Response                              |
-| ------ | --------- | ------------------------------------- |
-| GET    | `/`       | `trace-server` (plain text)           |
-| GET    | `/health` | `{"status":"ok","version":"0.1.0"}`   |
-| POST   | `/echo`   | Echoes back the posted `message`      |
+| Method | Path                 | Purpose                                   |
+| ------ | -------------------- | ----------------------------------------- |
+| GET    | `/health`            | Liveness — always 200 while the process is up |
+| GET    | `/ready`             | Readiness — 200 only when Postgres answers    |
+| POST   | `/api/v1/users`      | Insert a user                             |
+| GET    | `/api/v1/users/{id}` | Read a user back (no secret columns)      |
 
-```sh
-curl localhost:3000/health
-curl -X POST localhost:3000/echo \
-  -H 'content-type: application/json' \
-  -d '{"message":"hello"}'
+### `POST /api/v1/users`
+
+```json
+{
+  "first_name": "Ada",
+  "last_name": "Lovelace",
+  "role": "admin",
+  "password": "correct horse battery staple"
+}
 ```
 
-A malformed `/echo` body returns 422; unknown paths return 404.
+`role` is optional and defaults to `user`. Responds `201` with the created row
+plus the generated API key:
 
-## Tests
+```json
+{
+  "id": "0f8f...",
+  "first_name": "Ada",
+  "last_name": "Lovelace",
+  "role": "admin",
+  "created_at": "2026-08-06T18:40:00Z",
+  "updated_at": "2026-08-06T18:40:00Z",
+  "api_key": "trace_sk_..."
+}
+```
+
+**The API key is returned exactly once.** No endpoint reads it back, so the
+caller has to store it at creation time.
+
+Errors come back as `{"error": "...", "details": [...]}` — `422` for validation
+failures, `409` on a unique-constraint collision, `500` for anything else
+(database detail is logged, never returned).
+
+## Schema
+
+Migrations live in `db/migrations/` and are applied manually — the server does
+not run them at startup.
+
+| Migration | Contents |
+| --------- | -------- |
+| `0001_create_users.sql` | `users`, plus the shared `set_updated_at()` trigger function |
+| `0002_create_flights_schema.sql` | `airports`, `airlines`, `flights` |
+| `0003_add_updated_at_triggers.sql` | `updated_at` triggers on the three tables from 0002 |
+
+## Passwords and keys
+
+Passwords are hashed with Argon2id and a per-user random salt, on a blocking
+thread so the async executor isn't stalled. The plaintext is never logged, never
+stored, and never serialised — `ValidatedUser` deliberately has no `Debug` impl.
+API keys are 256 bits from the OS CSPRNG, prefixed `trace_sk_`.
+
+## Configuration
+
+| Variable       | Required | Notes                                          |
+| -------------- | -------- | ---------------------------------------------- |
+| `DATABASE_URL` | yes      | On Railway, set to `${{Postgres.DATABASE_URL}}` |
+| `PORT`         | no       | Defaults to `8080`; Railway injects it          |
+| `RUST_LOG`     | no       | Defaults to `trace_server=info,tower_http=info` |
+
+## Running locally
+
+```sh
+export DATABASE_URL='postgres://user:pass@host:5432/railway'
+cargo run
+```
+
+The schema is not created at startup — apply the migrations in `db/migrations/`
+first.
 
 ```sh
 cargo test
+cargo clippy --all-targets -- -D warnings
 ```
 
-Tests drive the router in-process via `tower::ServiceExt::oneshot`, so no port
-is bound.
+The router tests drive `app()` directly with `oneshot`, using a lazily-connected
+pool, so `cargo test` needs no database.
+
+## Deployment
+
+Deployed on Railway (project `trace`, service `api`) from this repo with the
+service root set to `/src/trace-server`, built from the `Dockerfile` here.
+
+Base URL: <https://api-production-946d.up.railway.app>
+
+`DATABASE_URL` is a `${{Postgres.DATABASE_URL}}` reference, so the API reaches
+the database over Railway's private network — the database does not need to be
+publicly exposed for the API to work.
+
+## Notes
+
+CORS is currently `CorsLayer::permissive()`, and `POST /api/v1/users` is
+unauthenticated — anyone who can reach the public URL can create a user. Both
+need tightening before this holds real data.

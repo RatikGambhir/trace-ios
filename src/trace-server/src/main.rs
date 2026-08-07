@@ -1,98 +1,135 @@
-use std::net::SocketAddr;
+mod error;
+mod handlers;
+mod models;
+mod state;
 
+use std::{sync::Arc, time::Duration};
+
+use anyhow::Context;
 use axum::{
     routing::{get, post},
-    Json, Router,
+    Router,
 };
-use serde::{Deserialize, Serialize};
-use tower_http::trace::TraceLayer;
+use sqlx::postgres::PgPoolOptions;
+use tokio::{net::TcpListener, signal};
+use tower::ServiceBuilder;
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+use crate::state::AppState;
+
+const DEFAULT_PORT: u16 = 8080;
+
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "trace_server=debug,tower_http=debug".into()),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "trace_server=info,tower_http=info,axum::rejection=trace".into()
+            }),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let addr: SocketAddr = std::env::var("TRACE_SERVER_ADDR")
-        .unwrap_or_else(|_| "127.0.0.1:3000".to_string())
-        .parse()
-        .expect("TRACE_SERVER_ADDR must be a valid socket address");
+    // Railway injects both of these: DATABASE_URL via a ${{Postgres.DATABASE_URL}}
+    // reference, PORT by the platform.
+    let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
+    let port: u16 = match std::env::var("PORT") {
+        Ok(value) => value.parse().context("PORT must be a valid port number")?,
+        Err(_) => DEFAULT_PORT,
+    };
 
-    let listener = tokio::net::TcpListener::bind(addr)
+    let db = PgPoolOptions::new()
+        .max_connections(10)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect(&database_url)
         .await
-        .expect("failed to bind listener");
+        .context("failed to connect to the database")?;
 
-    tracing::info!("listening on http://{}", listener.local_addr().unwrap());
+    let state = Arc::new(AppState { db });
 
-    axum::serve(listener, app())
+    let listener = TcpListener::bind(("0.0.0.0", port))
+        .await
+        .with_context(|| format!("failed to bind 0.0.0.0:{port}"))?;
+
+    tracing::info!("listening on 0.0.0.0:{port}");
+
+    axum::serve(listener, app(state))
         .with_graceful_shutdown(shutdown_signal())
         .await
-        .expect("server error");
+        .context("server error")?;
+
+    Ok(())
 }
 
-fn app() -> Router {
+/// Build the router. Kept separate from `main` so tests can drive it directly
+/// with `oneshot` instead of binding a port.
+fn app(state: Arc<AppState>) -> Router {
+    let api = Router::new()
+        .route("/users", post(handlers::create_user))
+        .route("/users/{id}", get(handlers::get_user));
+
     Router::new()
-        .route("/", get(root))
-        .route("/health", get(health))
-        .route("/echo", post(echo))
-        .layer(TraceLayer::new_for_http())
+        .route("/health", get(handlers::health))
+        .route("/ready", get(handlers::ready))
+        .nest("/api/v1", api)
+        .layer(
+            ServiceBuilder::new()
+                .layer(TraceLayer::new_for_http())
+                .layer(CorsLayer::permissive()),
+        )
+        .with_state(state)
 }
 
-async fn root() -> &'static str {
-    "trace-server"
-}
-
-#[derive(Serialize)]
-struct Health {
-    status: &'static str,
-    version: &'static str,
-}
-
-async fn health() -> Json<Health> {
-    Json(Health {
-        status: "ok",
-        version: env!("CARGO_PKG_VERSION"),
-    })
-}
-
-#[derive(Deserialize)]
-struct EchoRequest {
-    message: String,
-}
-
-#[derive(Serialize)]
-struct EchoResponse {
-    message: String,
-}
-
-async fn echo(Json(payload): Json<EchoRequest>) -> Json<EchoResponse> {
-    Json(EchoResponse {
-        message: payload.message,
-    })
-}
-
+/// Finish in-flight requests when the platform sends SIGTERM (or on Ctrl-C locally).
 async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("failed to install ctrl-c handler");
-    tracing::info!("shutting down");
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl-C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    tracing::info!("shutdown signal received");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::Body;
-    use axum::http::{Request, StatusCode};
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
     use tower::ServiceExt;
+
+    /// A pool that is never actually connected. Enough to build the router, and
+    /// enough for the routes below, which answer before touching the database.
+    fn test_state() -> Arc<AppState> {
+        Arc::new(AppState {
+            db: PgPoolOptions::new()
+                .connect_lazy("postgres://postgres@localhost/postgres")
+                .expect("the test connection string parses"),
+        })
+    }
 
     #[tokio::test]
     async fn health_returns_ok() {
-        let response = app()
+        let response = app(test_state())
             .oneshot(
                 Request::builder()
                     .uri("/health")
@@ -108,29 +145,42 @@ mod tests {
             .await
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["status"], "ok");
+        assert_eq!(body["status"], "healthy");
     }
 
     #[tokio::test]
-    async fn echo_round_trips_the_message() {
-        let response = app()
+    async fn create_user_rejects_an_invalid_payload_before_hitting_the_database() {
+        let response = app(test_state())
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/echo")
+                    .uri("/api/v1/users")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"message":"hello"}"#))
+                    .body(Body::from(
+                        r#"{"first_name":"","last_name":"Lovelace","password":"short"}"#,
+                    ))
                     .unwrap(),
             )
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["message"], "hello");
+        assert_eq!(body["error"], "validation_failed");
+        assert_eq!(body["details"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn unknown_routes_are_not_found() {
+        let response = app(test_state())
+            .oneshot(Request::builder().uri("/nope").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }
