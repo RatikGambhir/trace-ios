@@ -1,4 +1,6 @@
 mod error;
+mod flights;
+mod geo;
 mod handlers;
 mod models;
 mod state;
@@ -67,7 +69,8 @@ async fn main() -> anyhow::Result<()> {
 fn app(state: Arc<AppState>) -> Router {
     let api = Router::new()
         .route("/users", post(handlers::create_user))
-        .route("/users/{id}", get(handlers::get_user));
+        .route("/users/{id}", get(handlers::get_user))
+        .route("/flights", post(handlers::create_flight));
 
     Router::new()
         .route("/health", get(handlers::health))
@@ -171,6 +174,40 @@ mod tests {
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["error"], "validation_failed");
+        assert_eq!(body["details"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn create_flight_rejects_an_invalid_payload_before_opening_a_transaction() {
+        let response = app(test_state())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/flights")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{
+                            "airline": {"iata_code": "AA", "name": "American Airlines"},
+                            "flight_number": "100",
+                            "origin": {"iata_code": "JFK", "name": "Kennedy"},
+                            "destination": {"iata_code": "JFK", "name": "Kennedy"},
+                            "scheduled_departure_at": "2026-08-10T22:00:00Z",
+                            "scheduled_arrival_at": "2026-08-10T21:00:00Z"
+                        }"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"], "validation_failed");
+        // Same origin and destination, and an arrival before the departure.
         assert_eq!(body["details"].as_array().unwrap().len(), 2);
     }
 
