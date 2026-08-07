@@ -8,10 +8,13 @@ use uuid::Uuid;
 
 use crate::{
     core::error::{segment_constraint_error, ApiError},
-    models::journey::{
-        DriveRow, DriveView, FlightView, Journey, JourneyResponse, JourneyTotals, PlaceView,
-        SegmentRow, SegmentView, ValidatedBooking, ValidatedDrive, ValidatedJourney,
-        ValidatedSegment, VehicleView,
+    models::entities::journey::{DriveRow, Journey, JourneyTotals, SegmentRow},
+    models::requests::journey::{
+        ValidatedBooking, ValidatedDrive, ValidatedJourney, ValidatedSegment,
+    },
+    models::responses::journey::{
+        DriveResponse, FlightResponse, JourneyResponse, PlaceResponse, SegmentResponse,
+        VehicleResponse,
     },
 };
 
@@ -154,7 +157,7 @@ pub async fn load(conn: &mut PgConnection, journey_id: Uuid) -> Result<JourneyRe
 
     let segments = rows
         .into_iter()
-        .map(|row| SegmentView {
+        .map(|row| SegmentResponse {
             origin: row.origin_place_id.and_then(|id| places.get(&id).cloned()),
             destination: row
                 .destination_place_id
@@ -183,12 +186,12 @@ pub async fn load(conn: &mut PgConnection, journey_id: Uuid) -> Result<JourneyRe
 async fn load_places(
     conn: &mut PgConnection,
     place_ids: &[i64],
-) -> Result<HashMap<i64, PlaceView>, ApiError> {
+) -> Result<HashMap<i64, PlaceResponse>, ApiError> {
     if place_ids.is_empty() {
         return Ok(HashMap::new());
     }
 
-    let places = sqlx::query_as::<_, PlaceView>(
+    let places = sqlx::query_as::<_, PlaceResponse>(
         r#"
         SELECT p.id, p.name, p.kind, a.iata_code, p.city, p.country_code,
                p.latitude::float8 AS latitude, p.longitude::float8 AS longitude, p.timezone
@@ -207,12 +210,12 @@ async fn load_places(
 async fn load_segment_flights(
     conn: &mut PgConnection,
     segment_ids: &[Uuid],
-) -> Result<HashMap<Uuid, FlightView>, ApiError> {
+) -> Result<HashMap<Uuid, FlightResponse>, ApiError> {
     if segment_ids.is_empty() {
         return Ok(HashMap::new());
     }
 
-    let rows = sqlx::query_as::<_, FlightView>(
+    let rows = sqlx::query_as::<_, FlightResponse>(
         r#"
         SELECT sf.segment_id, sf.flight_id, f.airline_id, f.flight_number,
                f.origin_airport_id, f.destination_airport_id, f.distance_miles,
@@ -233,7 +236,7 @@ async fn load_segment_flights(
 async fn load_segment_drives(
     conn: &mut PgConnection,
     segment_ids: &[Uuid],
-) -> Result<HashMap<Uuid, DriveView>, ApiError> {
+) -> Result<HashMap<Uuid, DriveResponse>, ApiError> {
     if segment_ids.is_empty() {
         return Ok(HashMap::new());
     }
@@ -256,8 +259,8 @@ async fn load_segment_drives(
         .map(|row| {
             (
                 row.segment_id,
-                DriveView {
-                    vehicle: row.vehicle_id.map(|id| VehicleView {
+                DriveResponse {
+                    vehicle: row.vehicle_id.map(|id| VehicleResponse {
                         id,
                         nickname: row.nickname,
                         make: row.make,

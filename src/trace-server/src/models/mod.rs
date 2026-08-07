@@ -1,9 +1,16 @@
-//! Request bodies, response shapes, and the rows in between — plus the
-//! validation that turns one into the other.
+//! Request bodies, response shapes, and the rows in between.
 //!
-//! Types here are inert: they parse, check, and normalise, and never touch the
-//! database. That is what lets every validation rule be tested without one.
+//! Split by kind rather than by feature, so the direction of a type is
+//! obvious from where it lives:
+//!
+//! * `requests`  — what arrives, plus the validation that checks it
+//! * `entities`  — what the database stores
+//! * `responses` — what goes back
+//!
+//! Types here are inert: they parse, check, and normalise, and never touch
+//! the database. That is what lets every validation rule be tested without
+//! one.
 
-pub mod flight;
-pub mod journey;
-pub mod user;
+pub mod entities;
+pub mod requests;
+pub mod responses;

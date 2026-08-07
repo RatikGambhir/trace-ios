@@ -11,7 +11,8 @@ use uuid::Uuid;
 
 use crate::{
     core::{error::ApiError, state::AppState},
-    models::journey::{CreateJourneyRequest, JourneyResponse},
+    models::requests::journey::InsertJourneyRequest,
+    models::responses::journey::{GetJourneyResponse, InsertJourneyResponse},
     services::journeys,
 };
 
@@ -22,8 +23,8 @@ use crate::{
 /// unchanged.
 pub async fn create(
     State(state): State<Arc<AppState>>,
-    Json(payload): Json<CreateJourneyRequest>,
-) -> Result<(StatusCode, Json<JourneyResponse>), ApiError> {
+    Json(payload): Json<InsertJourneyRequest>,
+) -> Result<(StatusCode, Json<InsertJourneyResponse>), ApiError> {
     let (created, journey) = journeys::create(&state.db, payload).await?;
 
     let status = if created {
@@ -39,6 +40,6 @@ pub async fn create(
 pub async fn get(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
-) -> Result<Json<JourneyResponse>, ApiError> {
+) -> Result<Json<GetJourneyResponse>, ApiError> {
     Ok(Json(journeys::get(&state.db, id).await?))
 }

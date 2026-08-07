@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::models::flight::ResolvedAirport;
+use crate::models::entities::flight::ResolvedAirport;
 
 #[test]
 fn distance_needs_both_sets_of_coordinates() {

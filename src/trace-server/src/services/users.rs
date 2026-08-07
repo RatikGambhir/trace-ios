@@ -8,7 +8,9 @@ use crate::{
         crypto::{generate_api_key, hash_password},
         error::ApiError,
     },
-    models::user::{CreateUserRequest, CreateUserResponse, User},
+    models::entities::user::User,
+    models::requests::user::InsertUserRequest,
+    models::responses::user::InsertUserResponse,
     repositories::users,
 };
 
@@ -16,8 +18,8 @@ use crate::{
 /// returned here and never again — no endpoint reads it back.
 pub async fn create(
     pool: &PgPool,
-    request: CreateUserRequest,
-) -> Result<CreateUserResponse, ApiError> {
+    request: InsertUserRequest,
+) -> Result<InsertUserResponse, ApiError> {
     let validated = request.validate()?;
 
     // Argon2 is intentionally expensive, so keep it off the async executor.
@@ -33,7 +35,7 @@ pub async fn create(
 
     tracing::info!(user_id = %user.id, "created user");
 
-    Ok(CreateUserResponse { user, api_key })
+    Ok(InsertUserResponse { user, api_key })
 }
 
 /// Read a user back without any secret columns.

@@ -1,7 +1,7 @@
 use super::*;
 
-fn airport(iata: &str, latitude: f64, longitude: f64) -> AirportInput {
-    AirportInput {
+fn airport(iata: &str, latitude: f64, longitude: f64) -> AirportRequest {
+    AirportRequest {
         iata_code: iata.to_string(),
         icao_code: None,
         name: Some(format!("{iata} International")),
@@ -13,9 +13,9 @@ fn airport(iata: &str, latitude: f64, longitude: f64) -> AirportInput {
     }
 }
 
-fn request() -> FlightInput {
-    FlightInput {
-        airline: AirlineInput {
+fn request() -> FlightRequest {
+    FlightRequest {
+        airline: AirlineRequest {
             iata_code: "aa".to_string(),
             icao_code: Some("aal".to_string()),
             name: Some("American Airlines".to_string()),
@@ -38,7 +38,7 @@ fn request() -> FlightInput {
 }
 
 /// Validate standalone (no journey prefix) and demand failure.
-fn errors(request: FlightInput) -> Vec<String> {
+fn errors(request: FlightRequest) -> Vec<String> {
     let mut errors = Vec::new();
     request.validate_into("", &mut errors);
     assert!(!errors.is_empty(), "expected validation to fail");

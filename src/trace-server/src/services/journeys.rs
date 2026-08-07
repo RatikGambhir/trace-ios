@@ -18,10 +18,11 @@ use uuid::Uuid;
 
 use crate::{
     core::{error::ApiError, validation::field},
-    models::journey::{
-        CreateJourneyRequest, JourneyResponse, SegmentDetail, ValidatedJourney, ValidatedPlace,
-        ValidatedSegment, ValidatedVehicle,
+    models::requests::journey::{
+        InsertJourneyRequest, SegmentDetail, ValidatedJourney, ValidatedPlace, ValidatedSegment,
+        ValidatedVehicle,
     },
+    models::responses::journey::JourneyResponse,
     repositories::{journeys, places, users, vehicles},
     services::flights,
 };
@@ -41,7 +42,7 @@ pub struct PlaceCache(HashMap<String, i64>);
 /// the handler turns that into `201` or `200`.
 pub async fn create(
     pool: &PgPool,
-    request: CreateJourneyRequest,
+    request: InsertJourneyRequest,
 ) -> Result<(bool, JourneyResponse), ApiError> {
     let journey = request.validate()?;
 

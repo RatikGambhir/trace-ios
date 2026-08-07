@@ -4,7 +4,7 @@ use sqlx::PgConnection;
 
 use crate::{
     core::error::{unique_violation, ApiError},
-    models::flight::ValidatedAirline,
+    models::requests::flight::ValidatedAirline,
 };
 
 /// [`resolve_airport`].

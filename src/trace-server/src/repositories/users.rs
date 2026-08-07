@@ -4,8 +4,7 @@ use sqlx::PgConnection;
 use uuid::Uuid;
 
 use crate::{
-    core::error::ApiError,
-    models::user::{User, ValidatedUser},
+    core::error::ApiError, models::entities::user::User, models::requests::user::ValidatedUser,
 };
 
 /// Insert a user. The API key is supplied by the caller rather than generated

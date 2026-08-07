@@ -3,7 +3,7 @@
 use sqlx::PgConnection;
 use uuid::Uuid;
 
-use crate::{core::error::ApiError, models::journey::ValidatedNewVehicle};
+use crate::{core::error::ApiError, models::requests::journey::ValidatedNewVehicle};
 
 /// A vehicle by id, scoped to its owner so one user cannot name another's car.
 pub async fn find_for_user(

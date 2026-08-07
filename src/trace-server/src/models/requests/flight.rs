@@ -1,14 +1,8 @@
-//! Flights: the shared, real-world leg.
-//!
-//! A flight is not owned by a user — AA100 on a given day is one row in
-//! `flights` however many people were aboard. These are the request and row
-//! types plus their validation; the personal half of a flight (seat, cabin,
-//! booking reference) lives with the journey segment that references it.
+//! The flight a caller describes inside a journey segment, and its
+//! validated form.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
-use uuid::Uuid;
+use serde::Deserialize;
 
 use crate::core::validation::{field, fixed_code, optional_text};
 
@@ -40,7 +34,7 @@ const MAX_AIRCRAFT_REGISTRATION_LEN: usize = 20;
 /// the natural key, and everything else is needed just for the insert that
 /// happens when the airport is new to us.
 #[derive(Debug, Deserialize)]
-pub struct AirportInput {
+pub struct AirportRequest {
     pub iata_code: String,
     #[serde(default)]
     pub icao_code: Option<String>,
@@ -58,9 +52,9 @@ pub struct AirportInput {
     pub timezone: Option<String>,
 }
 
-/// An airline as the caller describes it, on the same terms as `AirportInput`.
+/// An airline as the caller describes it, on the same terms as `AirportRequest`.
 #[derive(Debug, Deserialize)]
-pub struct AirlineInput {
+pub struct AirlineRequest {
     pub iata_code: String,
     #[serde(default)]
     pub icao_code: Option<String>,
@@ -72,11 +66,11 @@ pub struct AirlineInput {
 ///
 /// `distance_miles` is deliberately absent — the server derives it.
 #[derive(Debug, Deserialize)]
-pub struct FlightInput {
-    pub airline: AirlineInput,
+pub struct FlightRequest {
+    pub airline: AirlineRequest,
     pub flight_number: String,
-    pub origin: AirportInput,
-    pub destination: AirportInput,
+    pub origin: AirportRequest,
+    pub destination: AirportRequest,
     pub scheduled_departure_at: DateTime<Utc>,
     pub scheduled_arrival_at: DateTime<Utc>,
     #[serde(default)]
@@ -100,32 +94,7 @@ pub struct FlightInput {
     pub aircraft_registration: Option<String>,
 }
 
-/// A row of `flights`, as returned to the caller.
-#[derive(Debug, Serialize, FromRow)]
-pub struct Flight {
-    pub id: Uuid,
-    pub airline_id: i64,
-    pub flight_number: String,
-    pub origin_airport_id: i64,
-    pub destination_airport_id: i64,
-    /// `NULL` when either airport has no coordinates on file.
-    pub distance_miles: Option<i32>,
-    pub scheduled_departure_at: DateTime<Utc>,
-    pub scheduled_arrival_at: DateTime<Utc>,
-    pub actual_departure_at: Option<DateTime<Utc>>,
-    pub actual_arrival_at: Option<DateTime<Utc>>,
-    pub status: String,
-    pub departure_terminal: Option<String>,
-    pub departure_gate: Option<String>,
-    pub arrival_terminal: Option<String>,
-    pub arrival_gate: Option<String>,
-    pub aircraft_type: Option<String>,
-    pub aircraft_registration: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-/// A trimmed, range-checked `AirportInput`.
+/// A trimmed, range-checked `AirportRequest`.
 pub struct ValidatedAirport {
     pub iata_code: String,
     pub icao_code: Option<String>,
@@ -137,14 +106,14 @@ pub struct ValidatedAirport {
     pub timezone: Option<String>,
 }
 
-/// A trimmed, range-checked `AirlineInput`.
+/// A trimmed, range-checked `AirlineRequest`.
 pub struct ValidatedAirline {
     pub iata_code: String,
     pub icao_code: Option<String>,
     pub name: Option<String>,
 }
 
-/// A trimmed, range-checked `FlightInput`.
+/// A trimmed, range-checked `FlightRequest`.
 pub struct ValidatedFlight {
     pub airline: ValidatedAirline,
     pub flight_number: String,
@@ -163,16 +132,7 @@ pub struct ValidatedFlight {
     pub aircraft_registration: Option<String>,
 }
 
-/// An airport row after `resolve_airport` — the id the flight references, plus
-/// the coordinates the distance is computed from.
-#[derive(Debug, FromRow)]
-pub struct ResolvedAirport {
-    pub id: i64,
-    pub latitude: Option<f64>,
-    pub longitude: Option<f64>,
-}
-
-impl FlightInput {
+impl FlightRequest {
     /// Check and normalise, collecting into a caller-owned error list so a
     /// journey can report problems across every segment at once.
     ///
@@ -296,7 +256,7 @@ impl FlightInput {
     }
 }
 
-impl AirportInput {
+impl AirportRequest {
     pub(crate) fn validate(self, field: &str, errors: &mut Vec<String>) -> ValidatedAirport {
         let iata_code = fixed_code(&self.iata_code, &format!("{field}.iata_code"), 3, errors);
         let icao_code = self
@@ -346,7 +306,7 @@ impl AirportInput {
     }
 }
 
-impl AirlineInput {
+impl AirlineRequest {
     fn validate(self, prefix: &str, errors: &mut Vec<String>) -> ValidatedAirline {
         let prefix = field(prefix, "airline");
 

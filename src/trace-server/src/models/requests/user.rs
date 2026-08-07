@@ -1,9 +1,6 @@
-//! Users: the request body, the row, and the validation between them.
+//! The user a caller posts, and its validated form.
 
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
-use uuid::Uuid;
+use serde::Deserialize;
 
 use crate::core::error::ApiError;
 
@@ -17,8 +14,9 @@ const MAX_PASSWORD_LEN: usize = 1024;
 const DEFAULT_ROLE: &str = "user";
 
 /// Body of `POST /api/v1/users`.
+/// Body of `POST /api/v1/users`.
 #[derive(Debug, Deserialize)]
-pub struct CreateUserRequest {
+pub struct InsertUserRequest {
     pub first_name: String,
     pub last_name: String,
     /// Optional; the column defaults to `user`.
@@ -27,28 +25,7 @@ pub struct CreateUserRequest {
     pub password: String,
 }
 
-/// A user row, minus the secret columns. `password_hash` is never serialised,
-/// and `api_key` is only returned once, by `CreateUserResponse`.
-#[derive(Debug, Serialize, FromRow)]
-pub struct User {
-    pub id: Uuid,
-    pub first_name: String,
-    pub last_name: String,
-    pub role: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CreateUserResponse {
-    #[serde(flatten)]
-    pub user: User,
-    /// Shown exactly once, at creation time. It is not retrievable afterwards
-    /// through any endpoint.
-    pub api_key: String,
-}
-
-/// A `CreateUserRequest` that has been trimmed and checked.
+/// A `InsertUserRequest` that has been trimmed and checked.
 pub struct ValidatedUser {
     pub first_name: String,
     pub last_name: String,
@@ -56,7 +33,7 @@ pub struct ValidatedUser {
     pub password: String,
 }
 
-impl CreateUserRequest {
+impl InsertUserRequest {
     pub fn validate(self) -> Result<ValidatedUser, ApiError> {
         let mut errors = Vec::new();
 

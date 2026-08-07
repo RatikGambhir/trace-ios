@@ -1,7 +1,7 @@
 use super::*;
 
-fn request(first: &str, last: &str, password: &str) -> CreateUserRequest {
-    CreateUserRequest {
+fn request(first: &str, last: &str, password: &str) -> InsertUserRequest {
+    InsertUserRequest {
         first_name: first.to_string(),
         last_name: last.to_string(),
         role: None,

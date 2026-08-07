@@ -14,7 +14,8 @@ use crate::{
         geo::{great_circle_miles, Coordinates},
         validation::field,
     },
-    models::flight::{Flight, ResolvedAirport, ValidatedFlight},
+    models::entities::flight::{Flight, ResolvedAirport},
+    models::requests::flight::ValidatedFlight,
     repositories::{airlines, airports, flights},
 };
 

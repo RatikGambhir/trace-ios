@@ -4,7 +4,8 @@ use sqlx::PgConnection;
 
 use crate::{
     core::error::{check_violation, ApiError},
-    models::flight::{Flight, ValidatedFlight},
+    models::entities::flight::Flight,
+    models::requests::flight::ValidatedFlight,
 };
 
 /// Every column of `flights`, in one place — the insert and the idempotent

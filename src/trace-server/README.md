@@ -224,17 +224,27 @@ src/
 ├── handlers/          HTTP in, status code out — no logic of their own
 ├── services/          transactions, idempotency, derived values
 ├── repositories/      SQL, on a connection the caller owns
-├── models/            request and row types, and their validation
+├── models/
+│   ├── requests/      what arrives, plus the validation that checks it
+│   ├── entities/      what the database stores
+│   └── responses/     what goes back
 └── core/              error shape, geometry, crypto, validation helpers, state
 ```
+
+Request and response types are named for the operation they belong to —
+`InsertUserRequest`/`InsertUserResponse`, `InsertJourneyRequest`/
+`InsertJourneyResponse`, `GetJourneyResponse` — so a signature says which
+endpoint it serves. Each request validates into a `Validated*` twin beside it;
+nothing downstream of `models::requests` ever sees a raw body.
 
 Each layer only calls the one below it. Repositories take a `&mut PgConnection`
 rather than a pool, which is what lets a journey write nine tables atomically:
 the service opens one transaction and hands the same connection to each
 repository in turn.
 
-Tests sit next to the code they cover, as `<file>_tests.rs` — `models/journey.rs`
-is tested by `models/journey_tests.rs`, wired in with:
+Tests sit next to the code they cover, as `<file>_tests.rs` —
+`models/requests/journey.rs` is tested by `models/requests/journey_tests.rs`,
+wired in with:
 
 ```rust
 #[cfg(test)]

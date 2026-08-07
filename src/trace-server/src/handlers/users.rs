@@ -11,15 +11,16 @@ use uuid::Uuid;
 
 use crate::{
     core::{error::ApiError, state::AppState},
-    models::user::{CreateUserRequest, CreateUserResponse, User},
+    models::requests::user::InsertUserRequest,
+    models::responses::user::{GetUserResponse, InsertUserResponse},
     services::users,
 };
 
 /// `POST /api/v1/users`
 pub async fn create(
     State(state): State<Arc<AppState>>,
-    Json(payload): Json<CreateUserRequest>,
-) -> Result<(StatusCode, Json<CreateUserResponse>), ApiError> {
+    Json(payload): Json<InsertUserRequest>,
+) -> Result<(StatusCode, Json<InsertUserResponse>), ApiError> {
     let user = users::create(&state.db, payload).await?;
 
     Ok((StatusCode::CREATED, Json(user)))
@@ -29,6 +30,6 @@ pub async fn create(
 pub async fn get(
     State(state): State<Arc<AppState>>,
     Path(id): Path<Uuid>,
-) -> Result<Json<User>, ApiError> {
+) -> Result<Json<GetUserResponse>, ApiError> {
     Ok(Json(users::get(&state.db, id).await?))
 }

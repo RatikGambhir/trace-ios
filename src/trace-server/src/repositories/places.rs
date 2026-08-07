@@ -2,7 +2,7 @@
 
 use sqlx::PgConnection;
 
-use crate::{core::error::ApiError, models::journey::ValidatedCustomPlace};
+use crate::{core::error::ApiError, models::requests::journey::ValidatedCustomPlace};
 
 /// Whether a place id exists, for the `{"type": "saved"}` form.
 pub async fn find(conn: &mut PgConnection, id: i64) -> Result<Option<i64>, ApiError> {

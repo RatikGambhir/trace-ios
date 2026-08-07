@@ -2,7 +2,7 @@ use super::*;
 
 use serde_json::json;
 
-fn journey(segments: Value) -> CreateJourneyRequest {
+fn journey(segments: Value) -> InsertJourneyRequest {
     serde_json::from_value(json!({
         "user_id": "00000000-0000-0000-0000-000000000001",
         "title": "England, August 2026",
@@ -11,7 +11,7 @@ fn journey(segments: Value) -> CreateJourneyRequest {
     .expect("the fixture deserialises")
 }
 
-fn errors(request: CreateJourneyRequest) -> Vec<String> {
+fn errors(request: InsertJourneyRequest) -> Vec<String> {
     match request.validate() {
         Err(ApiError::Validation(errors)) => errors,
         Err(other) => panic!("expected validation errors, got {other:?}"),

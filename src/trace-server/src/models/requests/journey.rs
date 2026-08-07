@@ -1,17 +1,15 @@
-//! Journeys: a user's trip and its ordered segments.
-//!
-//! Request types, the rows they become, and the validation between the two.
+//! The trip a caller posts, its segments, and the checked forms they
+//! validate into.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
-use sqlx::FromRow;
 use uuid::Uuid;
 
 use crate::{
     core::error::ApiError,
     core::validation::{field, object_or_default, one_of, optional_text},
-    models::flight::{AirportInput, FlightInput, ValidatedAirport, ValidatedFlight},
+    models::requests::flight::{AirportRequest, FlightRequest, ValidatedAirport, ValidatedFlight},
 };
 
 /// The modes allowed by the `journey_segments` mode CHECK.
@@ -48,7 +46,7 @@ const MAX_SEGMENTS: usize = 100;
 
 /// Body of `POST /api/v1/journeys`.
 #[derive(Debug, Deserialize)]
-pub struct CreateJourneyRequest {
+pub struct InsertJourneyRequest {
     pub user_id: Uuid,
     /// Opt-in idempotency. Replaying a request with a key this user has already
     /// used returns the stored journey instead of creating a second one.
@@ -72,19 +70,19 @@ pub struct CreateJourneyRequest {
     /// Ordered. `position` is the index in this array, so the caller never has
     /// to keep two orderings in step.
     #[serde(default)]
-    pub segments: Vec<SegmentInput>,
+    pub segments: Vec<SegmentRequest>,
 }
 
 /// One leg of the journey.
 #[derive(Debug, Deserialize)]
-pub struct SegmentInput {
+pub struct SegmentRequest {
     pub mode: String,
 
     /// Omitted for `flight` segments — a flight already knows its airports.
     #[serde(default)]
-    pub origin: Option<PlaceInput>,
+    pub origin: Option<PlaceRequest>,
     #[serde(default)]
-    pub destination: Option<PlaceInput>,
+    pub destination: Option<PlaceRequest>,
 
     #[serde(default)]
     pub started_at: Option<DateTime<Utc>>,
@@ -104,13 +102,13 @@ pub struct SegmentInput {
 
     /// Required for `mode: "flight"`, rejected otherwise.
     #[serde(default)]
-    pub flight: Option<FlightInput>,
+    pub flight: Option<FlightRequest>,
     /// The traveller's own booking on that flight.
     #[serde(default)]
-    pub booking: Option<BookingInput>,
+    pub booking: Option<BookingRequest>,
     /// Optional for `mode: "drive"`, rejected otherwise.
     #[serde(default)]
-    pub drive: Option<DriveInput>,
+    pub drive: Option<DriveRequest>,
 }
 
 /// Where a segment starts or ends. Three forms: a place already stored, an
@@ -118,14 +116,14 @@ pub struct SegmentInput {
 /// a new place described inline.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum PlaceInput {
+pub enum PlaceRequest {
     Saved { id: i64 },
-    Airport(AirportInput),
-    Custom(CustomPlaceInput),
+    Airport(AirportRequest),
+    Custom(CustomPlaceRequest),
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CustomPlaceInput {
+pub struct CustomPlaceRequest {
     pub name: String,
     #[serde(default)]
     pub kind: Option<String>,
@@ -145,7 +143,7 @@ pub struct CustomPlaceInput {
 
 /// What is personal about a flight, as opposed to the flight itself.
 #[derive(Debug, Deserialize)]
-pub struct BookingInput {
+pub struct BookingRequest {
     #[serde(default)]
     pub seat: Option<String>,
     #[serde(default)]
@@ -157,9 +155,9 @@ pub struct BookingInput {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct DriveInput {
+pub struct DriveRequest {
     #[serde(default)]
-    pub vehicle: Option<VehicleInput>,
+    pub vehicle: Option<VehicleRequest>,
     #[serde(default)]
     pub role: Option<String>,
     #[serde(default)]
@@ -168,13 +166,13 @@ pub struct DriveInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum VehicleInput {
+pub enum VehicleRequest {
     Saved { id: i64 },
-    New(NewVehicleInput),
+    New(NewVehicleRequest),
 }
 
 #[derive(Debug, Deserialize)]
-pub struct NewVehicleInput {
+pub struct NewVehicleRequest {
     #[serde(default)]
     pub nickname: Option<String>,
     #[serde(default)]
@@ -187,10 +185,8 @@ pub struct NewVehicleInput {
     pub license_plate: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Validated types
-// ---------------------------------------------------------------------------
-
+/// A trimmed, range-checked `InsertJourneyRequest`. Everything downstream —
+/// services, repositories — sees this and never the raw body.
 pub struct ValidatedJourney {
     pub user_id: Uuid,
     pub idempotency_key: Option<String>,
@@ -272,141 +268,7 @@ pub struct ValidatedNewVehicle {
     pub license_plate: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Response types
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Serialize, FromRow)]
-pub struct Journey {
-    pub id: Uuid,
-    pub user_id: Uuid,
-    pub idempotency_key: Option<String>,
-    pub title: String,
-    pub description: Option<String>,
-    pub started_at: Option<DateTime<Utc>>,
-    pub ended_at: Option<DateTime<Utc>>,
-    pub status: String,
-    pub visibility: String,
-    pub metadata: Value,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-/// Straight off the `journey_totals` view — one roll-up across every mode.
-#[derive(Debug, Serialize, FromRow)]
-pub struct JourneyTotals {
-    pub segment_count: i64,
-    pub mode_count: i64,
-    pub total_distance_miles: i64,
-    pub total_duration_minutes: i64,
-    pub first_departure_at: Option<DateTime<Utc>>,
-    pub last_arrival_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct JourneyResponse {
-    #[serde(flatten)]
-    pub journey: Journey,
-    pub totals: JourneyTotals,
-    pub segments: Vec<SegmentView>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SegmentView {
-    pub id: Uuid,
-    pub position: i32,
-    pub mode: String,
-    pub origin: Option<PlaceView>,
-    pub destination: Option<PlaceView>,
-    pub started_at: Option<DateTime<Utc>>,
-    pub ended_at: Option<DateTime<Utc>>,
-    pub duration_minutes: Option<i32>,
-    pub distance_miles: Option<i32>,
-    pub notes: Option<String>,
-    pub metadata: Value,
-    pub flight: Option<FlightView>,
-    pub drive: Option<DriveView>,
-}
-
-#[derive(Debug, Clone, Serialize, FromRow)]
-pub struct PlaceView {
-    pub id: i64,
-    pub name: String,
-    pub kind: String,
-    /// Present only for airport places.
-    pub iata_code: Option<String>,
-    pub city: Option<String>,
-    pub country_code: Option<String>,
-    pub latitude: Option<f64>,
-    pub longitude: Option<f64>,
-    pub timezone: Option<String>,
-}
-
-#[derive(Debug, Serialize, FromRow)]
-pub struct FlightView {
-    #[sqlx(rename = "segment_id")]
-    #[serde(skip_serializing)]
-    pub segment_id: Uuid,
-    pub flight_id: Uuid,
-    pub airline_id: i64,
-    pub flight_number: String,
-    pub origin_airport_id: i64,
-    pub destination_airport_id: i64,
-    pub distance_miles: Option<i32>,
-    pub scheduled_departure_at: DateTime<Utc>,
-    pub scheduled_arrival_at: DateTime<Utc>,
-    pub status: String,
-    pub seat: Option<String>,
-    pub cabin: Option<String>,
-    pub booking_reference: Option<String>,
-    pub ticket_number: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct DriveView {
-    pub vehicle: Option<VehicleView>,
-    pub role: Option<String>,
-    pub route_polyline: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct VehicleView {
-    pub id: i64,
-    pub nickname: Option<String>,
-    pub make: Option<String>,
-    pub model: Option<String>,
-    pub year: Option<i16>,
-}
-
-/// Flat row for the drive join; split into `DriveView` + `VehicleView` after.
-#[derive(Debug, FromRow)]
-pub struct DriveRow {
-    pub segment_id: Uuid,
-    pub role: Option<String>,
-    pub route_polyline: Option<String>,
-    pub vehicle_id: Option<i64>,
-    pub nickname: Option<String>,
-    pub make: Option<String>,
-    pub model: Option<String>,
-    pub year: Option<i16>,
-}
-
-#[derive(Debug, FromRow)]
-pub struct SegmentRow {
-    pub id: Uuid,
-    pub position: i32,
-    pub mode: String,
-    pub origin_place_id: Option<i64>,
-    pub destination_place_id: Option<i64>,
-    pub started_at: Option<DateTime<Utc>>,
-    pub ended_at: Option<DateTime<Utc>>,
-    pub duration_minutes: Option<i32>,
-    pub distance_miles: Option<i32>,
-    pub notes: Option<String>,
-    pub metadata: Value,
-}
-
-impl CreateJourneyRequest {
+impl InsertJourneyRequest {
     pub fn validate(self) -> Result<ValidatedJourney, ApiError> {
         let mut errors = Vec::new();
 
@@ -485,7 +347,7 @@ impl CreateJourneyRequest {
     }
 }
 
-impl SegmentInput {
+impl SegmentRequest {
     fn validate(self, index: usize, errors: &mut Vec<String>) -> ValidatedSegment {
         let prefix = format!("segments[{index}]");
 
@@ -607,16 +469,16 @@ impl SegmentInput {
     }
 }
 
-impl PlaceInput {
+impl PlaceRequest {
     fn validate(self, prefix: &str, errors: &mut Vec<String>) -> ValidatedPlace {
         match self {
-            PlaceInput::Saved { id } => {
+            PlaceRequest::Saved { id } => {
                 if id <= 0 {
                     errors.push(format!("{prefix}.id must be a positive place id"));
                 }
                 ValidatedPlace::Saved(id)
             }
-            PlaceInput::Airport(airport) => {
+            PlaceRequest::Airport(airport) => {
                 // Reuses the airport rules from the flight path, so an airport
                 // is described the same way wherever it appears.
                 let mut collected = Vec::new();
@@ -624,14 +486,14 @@ impl PlaceInput {
                 errors.append(&mut collected);
                 ValidatedPlace::Airport(Box::new(validated))
             }
-            PlaceInput::Custom(place) => {
+            PlaceRequest::Custom(place) => {
                 ValidatedPlace::Custom(Box::new(place.validate(prefix, errors)))
             }
         }
     }
 }
 
-impl CustomPlaceInput {
+impl CustomPlaceRequest {
     fn validate(self, prefix: &str, errors: &mut Vec<String>) -> ValidatedCustomPlace {
         let name = self.name.trim().to_string();
         if name.is_empty() {
@@ -704,7 +566,7 @@ impl CustomPlaceInput {
     }
 }
 
-impl BookingInput {
+impl BookingRequest {
     fn validate(self, prefix: &str, errors: &mut Vec<String>) -> ValidatedBooking {
         let prefix = field(prefix, "booking");
 
@@ -740,7 +602,7 @@ impl BookingInput {
     }
 }
 
-impl DriveInput {
+impl DriveRequest {
     fn validate(self, prefix: &str, errors: &mut Vec<String>) -> ValidatedDrive {
         let prefix = field(prefix, "drive");
 
@@ -767,16 +629,16 @@ impl DriveInput {
     }
 }
 
-impl VehicleInput {
+impl VehicleRequest {
     fn validate(self, prefix: &str, errors: &mut Vec<String>) -> ValidatedVehicle {
         match self {
-            VehicleInput::Saved { id } => {
+            VehicleRequest::Saved { id } => {
                 if id <= 0 {
                     errors.push(format!("{prefix}.id must be a positive vehicle id"));
                 }
                 ValidatedVehicle::Saved(id)
             }
-            VehicleInput::New(vehicle) => {
+            VehicleRequest::New(vehicle) => {
                 let nickname = optional_text(
                     vehicle.nickname,
                     &field(prefix, "nickname"),

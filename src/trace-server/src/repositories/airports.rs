@@ -4,7 +4,8 @@ use sqlx::PgConnection;
 
 use crate::{
     core::error::{unique_violation, ApiError},
-    models::flight::{ResolvedAirport, ValidatedAirport},
+    models::entities::flight::ResolvedAirport,
+    models::requests::flight::ValidatedAirport,
 };
 
 /// Find the airport by IATA code, inserting it if we have never seen it.
