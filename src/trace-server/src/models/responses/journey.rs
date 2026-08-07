@@ -49,9 +49,9 @@ pub struct PlaceResponse {
 
 #[derive(Debug, Serialize, FromRow)]
 pub struct FlightResponse {
-    #[sqlx(rename = "segment_id")]
+    #[sqlx(rename = "leg_id")]
     #[serde(skip_serializing)]
-    pub segment_id: Uuid,
+    pub leg_id: Uuid,
     pub flight_id: Uuid,
     pub airline_id: i64,
     pub flight_number: String,

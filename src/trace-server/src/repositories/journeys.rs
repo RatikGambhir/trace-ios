@@ -1,4 +1,5 @@
-//! `journeys`, `journey_segments`, and the per-mode `segment_*` tables.
+//! `journeys`, `journey_legs`, and the per-mode `journey_flights` and
+//! `journey_drives` tables.
 
 use std::collections::HashMap;
 
@@ -8,7 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     core::error::{segment_constraint_error, ApiError},
-    models::entities::journey::{DriveRow, Journey, JourneyTotals, SegmentRow},
+    models::entities::journey::{DriveRow, Journey, JourneyTotals, LegRow},
     models::requests::journey::{
         ValidatedBooking, ValidatedDrive, ValidatedJourney, ValidatedSegment,
     },
@@ -131,11 +132,11 @@ pub async fn load(conn: &mut PgConnection, journey_id: Uuid) -> Result<JourneyRe
     .fetch_one(&mut *conn)
     .await?;
 
-    let rows = sqlx::query_as::<_, SegmentRow>(
+    let rows = sqlx::query_as::<_, LegRow>(
         r#"
         SELECT id, position, mode, origin_place_id, destination_place_id,
                started_at, ended_at, duration_minutes, distance_miles, notes, metadata
-        FROM journey_segments
+        FROM journey_legs
         WHERE journey_id = $1
         ORDER BY position
         "#,
@@ -144,7 +145,7 @@ pub async fn load(conn: &mut PgConnection, journey_id: Uuid) -> Result<JourneyRe
     .fetch_all(&mut *conn)
     .await?;
 
-    let segment_ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
+    let leg_ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
     let place_ids: Vec<i64> = rows
         .iter()
         .flat_map(|row| [row.origin_place_id, row.destination_place_id])
@@ -152,8 +153,8 @@ pub async fn load(conn: &mut PgConnection, journey_id: Uuid) -> Result<JourneyRe
         .collect();
 
     let places = load_places(conn, &place_ids).await?;
-    let mut flights = load_segment_flights(conn, &segment_ids).await?;
-    let mut drives = load_segment_drives(conn, &segment_ids).await?;
+    let mut flights = load_flights(conn, &leg_ids).await?;
+    let mut drives = load_drives(conn, &leg_ids).await?;
 
     let segments = rows
         .into_iter()
@@ -207,50 +208,50 @@ async fn load_places(
     Ok(places.into_iter().map(|place| (place.id, place)).collect())
 }
 
-async fn load_segment_flights(
+async fn load_flights(
     conn: &mut PgConnection,
-    segment_ids: &[Uuid],
+    leg_ids: &[Uuid],
 ) -> Result<HashMap<Uuid, FlightResponse>, ApiError> {
-    if segment_ids.is_empty() {
+    if leg_ids.is_empty() {
         return Ok(HashMap::new());
     }
 
     let rows = sqlx::query_as::<_, FlightResponse>(
         r#"
-        SELECT sf.segment_id, sf.flight_id, f.airline_id, f.flight_number,
+        SELECT sf.leg_id, sf.flight_id, f.airline_id, f.flight_number,
                f.origin_airport_id, f.destination_airport_id, f.distance_miles,
                f.scheduled_departure_at, f.scheduled_arrival_at, f.status,
                sf.seat, sf.cabin, sf.booking_reference, sf.ticket_number
-        FROM segment_flights sf
+        FROM journey_flights sf
         JOIN flights f ON f.id = sf.flight_id
-        WHERE sf.segment_id = ANY($1)
+        WHERE sf.leg_id = ANY($1)
         "#,
     )
-    .bind(segment_ids)
+    .bind(leg_ids)
     .fetch_all(conn)
     .await?;
 
-    Ok(rows.into_iter().map(|row| (row.segment_id, row)).collect())
+    Ok(rows.into_iter().map(|row| (row.leg_id, row)).collect())
 }
 
-async fn load_segment_drives(
+async fn load_drives(
     conn: &mut PgConnection,
-    segment_ids: &[Uuid],
+    leg_ids: &[Uuid],
 ) -> Result<HashMap<Uuid, DriveResponse>, ApiError> {
-    if segment_ids.is_empty() {
+    if leg_ids.is_empty() {
         return Ok(HashMap::new());
     }
 
     let rows = sqlx::query_as::<_, DriveRow>(
         r#"
-        SELECT sd.segment_id, sd.role, sd.route_polyline,
+        SELECT sd.leg_id, sd.role, sd.route_polyline,
                v.id AS vehicle_id, v.nickname, v.make, v.model, v.year
-        FROM segment_drives sd
+        FROM journey_drives sd
         LEFT JOIN vehicles v ON v.id = sd.vehicle_id
-        WHERE sd.segment_id = ANY($1)
+        WHERE sd.leg_id = ANY($1)
         "#,
     )
-    .bind(segment_ids)
+    .bind(leg_ids)
     .fetch_all(conn)
     .await?;
 
@@ -258,7 +259,7 @@ async fn load_segment_drives(
         .into_iter()
         .map(|row| {
             (
-                row.segment_id,
+                row.leg_id,
                 DriveResponse {
                     vehicle: row.vehicle_id.map(|id| VehicleResponse {
                         id,
@@ -277,7 +278,7 @@ async fn load_segment_drives(
 
 /// The parent-row values a segment insert needs, after the service has derived
 /// whatever it could from the segment's mode.
-pub struct SegmentWrite<'a> {
+pub struct LegWrite<'a> {
     pub journey_id: Uuid,
     pub segment: &'a ValidatedSegment,
     pub origin_place_id: Option<i64>,
@@ -288,16 +289,13 @@ pub struct SegmentWrite<'a> {
     pub distance_miles: Option<i32>,
 }
 
-/// Insert the `journey_segments` row and return its id.
-pub async fn insert_segment(
-    conn: &mut PgConnection,
-    write: &SegmentWrite<'_>,
-) -> Result<Uuid, ApiError> {
+/// Insert the `journey_legs` row and return its id.
+pub async fn insert_leg(conn: &mut PgConnection, write: &LegWrite<'_>) -> Result<Uuid, ApiError> {
     let prefix = format!("segments[{}]", write.segment.position - 1);
 
     let (id,): (Uuid,) = sqlx::query_as(
         r#"
-        INSERT INTO journey_segments (
+        INSERT INTO journey_legs (
             journey_id, position, mode, origin_place_id, destination_place_id,
             started_at, ended_at, duration_minutes, distance_miles, notes, metadata
         )
@@ -324,21 +322,21 @@ pub async fn insert_segment(
 }
 
 /// Attach the traveller's booking to a flight segment.
-pub async fn insert_segment_flight(
+pub async fn insert_flight(
     conn: &mut PgConnection,
-    segment_id: Uuid,
+    leg_id: Uuid,
     flight_id: Uuid,
     booking: &ValidatedBooking,
 ) -> Result<(), ApiError> {
     sqlx::query(
         r#"
-        INSERT INTO segment_flights (
-            segment_id, flight_id, seat, cabin, booking_reference, ticket_number
+        INSERT INTO journey_flights (
+            leg_id, flight_id, seat, cabin, booking_reference, ticket_number
         )
         VALUES ($1, $2, $3, $4, $5, $6)
         "#,
     )
-    .bind(segment_id)
+    .bind(leg_id)
     .bind(flight_id)
     .bind(&booking.seat)
     .bind(&booking.cabin)
@@ -351,19 +349,19 @@ pub async fn insert_segment_flight(
 }
 
 /// Attach the vehicle and route to a drive segment.
-pub async fn insert_segment_drive(
+pub async fn insert_drive(
     conn: &mut PgConnection,
-    segment_id: Uuid,
+    leg_id: Uuid,
     vehicle_id: Option<i64>,
     drive: &ValidatedDrive,
 ) -> Result<(), ApiError> {
     sqlx::query(
         r#"
-        INSERT INTO segment_drives (segment_id, vehicle_id, role, route_polyline)
+        INSERT INTO journey_drives (leg_id, vehicle_id, role, route_polyline)
         VALUES ($1, $2, $3, $4)
         "#,
     )
-    .bind(segment_id)
+    .bind(leg_id)
     .bind(vehicle_id)
     .bind(&drive.role)
     .bind(&drive.route_polyline)

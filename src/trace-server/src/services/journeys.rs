@@ -110,7 +110,7 @@ async fn create_segment(
 ) -> Result<(), ApiError> {
     let prefix = format!("segments[{}]", segment.position - 1);
 
-    let mut write = journeys::SegmentWrite {
+    let mut write = journeys::LegWrite {
         journey_id,
         segment,
         origin_place_id: None,
@@ -166,14 +166,14 @@ async fn create_segment(
         }
     }
 
-    let segment_id = journeys::insert_segment(conn, &write).await?;
+    let leg_id = journeys::insert_leg(conn, &write).await?;
 
     match &segment.detail {
         SegmentDetail::Flight { booking, .. } => {
             let flight_id = resolved_flight
                 .expect("a flight segment always resolves its flight before the parent insert");
 
-            journeys::insert_segment_flight(conn, segment_id, flight_id, booking).await?;
+            journeys::insert_flight(conn, leg_id, flight_id, booking).await?;
         }
         SegmentDetail::Drive(drive) => {
             let vehicle_id = match &drive.vehicle {
@@ -189,7 +189,7 @@ async fn create_segment(
                 None => None,
             };
 
-            journeys::insert_segment_drive(conn, segment_id, vehicle_id, drive).await?;
+            journeys::insert_drive(conn, leg_id, vehicle_id, drive).await?;
         }
         SegmentDetail::Bare => {}
     }

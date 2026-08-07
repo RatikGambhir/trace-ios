@@ -110,7 +110,7 @@ pub fn check_violation(err: sqlx::Error) -> ApiError {
     ApiError::Database(err)
 }
 
-/// Name the segment when a `journey_segments` constraint rejects the row, so the
+/// Name the segment when a `journey_legs` constraint rejects the row, so the
 /// caller learns which leg was wrong rather than just which constraint fired.
 pub fn segment_constraint_error(err: sqlx::Error, prefix: &str) -> ApiError {
     if let sqlx::Error::Database(ref db_err) = err {

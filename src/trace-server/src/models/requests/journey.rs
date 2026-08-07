@@ -12,7 +12,7 @@ use crate::{
     models::requests::flight::{AirportRequest, FlightRequest, ValidatedAirport, ValidatedFlight},
 };
 
-/// The modes allowed by the `journey_segments` mode CHECK.
+/// The modes allowed by the `journey_legs` mode CHECK.
 const SEGMENT_MODES: [&str; 8] = [
     "flight", "drive", "train", "bus", "ferry", "walk", "bike", "other",
 ];
@@ -361,7 +361,7 @@ impl SegmentRequest {
         }
 
         // Each mode admits exactly one detail object. Saying so here means the
-        // composite (segment_id, mode) foreign key never has to reject anything.
+        // composite (leg_id, mode) foreign key never has to reject anything.
         let is_flight = mode == "flight";
         let is_drive = mode == "drive";
 

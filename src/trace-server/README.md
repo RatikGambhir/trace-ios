@@ -1,7 +1,7 @@
 # trace-server
 
 Axum service backing the Trace app. It owns the journeys schema — `users`,
-`journeys`, `journey_segments`, `segment_flights`, `segment_drives`, `places`,
+`journeys`, `journey_legs`, `journey_flights`, `journey_drives`, `places`,
 `vehicles`, `airports`, `airlines`, and `flights` — in the Railway `trace`
 Postgres database.
 
@@ -165,13 +165,14 @@ not run them at startup.
 | `0001_create_users.sql` | `users`, plus the shared `set_updated_at()` trigger function |
 | `0002_create_flights_schema.sql` | `airports`, `airlines`, `flights` |
 | `0003_add_updated_at_triggers.sql` | `updated_at` triggers on the three tables from 0002 |
-| `0004_create_journeys_schema.sql` | `places`, `vehicles`, `journeys`, `journey_segments`, the per-mode `segment_*` tables, and the `journey_totals` view |
+| `0004_create_journeys_schema.sql` | `places`, `vehicles`, `journeys`, `journey_legs`, the per-mode leg tables, and the `journey_totals` view |
 | `0005_add_journey_idempotency.sql` | `journeys.idempotency_key`, and the unique indexes behind journey and vehicle get-or-create |
+| `0006_rename_segment_tables.sql` | Renames `journey_segments`→`journey_legs`, `segment_flights`→`journey_flights`, `segment_drives`→`journey_drives`, and their constraints, indexes, and triggers |
 
 ### Journeys
 
 A journey is one user's trip, made of ordered segments. Everything every mode
-of transport has — when, where, how long, how far — lives on `journey_segments`,
+of transport has — when, where, how long, how far — lives on `journey_legs`,
 so a trip total is one `SUM` across flights, drives, and anything added later:
 
 ```sql
@@ -180,17 +181,24 @@ SELECT * FROM journey_totals WHERE journey_id = $1;
 
 Each mode that needs more columns gets its own small table keyed on the segment:
 
-- `segment_flights` → references `flights(id)`, plus seat, cabin, and booking
+- `journey_flights` → references `flights(id)`, plus seat, cabin, and booking
   reference. A flight is shared — one `flights` row serves every user aboard —
   so this table holds only what is personal to the traveller. Flight number and
   schedule stay on `flights`.
-- `segment_drives` → references `vehicles(id)`, plus role and route. A drive has
+- `journey_drives` → references `vehicles(id)`, plus role and route. A drive has
   no shared counterpart, so its details live here outright.
 - Modes with nothing extra to say (`walk`, `bike`, `bus`, …) need no subtype row
   at all.
 
-Subtype tables foreign-key `(segment_id, mode)` against
-`journey_segments (id, mode)`, so a drive cannot attach to a flight segment, and
+**The database says *leg*, the API says *segment*.** The tables were renamed to
+a `journey_` prefix without touching the wire contract, so requests and responses
+still carry a `segments` array and errors still read `segments[2].flight…`.
+Renaming the API too is a mechanical follow-up if you want one vocabulary
+throughout; it would be a breaking change to the contract, which nothing consumes
+yet.
+
+Subtype tables foreign-key `(leg_id, mode)` against
+`journey_legs (id, mode)`, so a drive cannot attach to a flight leg, and
 a segment's mode cannot be changed while its details exist. Adding a mode later
 is one new table plus one value in the `mode` CHECK.
 

@@ -1,4 +1,4 @@
-//! Rows of `journeys` and `journey_segments`, plus the flat shapes the
+//! Rows of `journeys` and `journey_legs`, plus the flat shapes the
 //! segment queries decode into before they are assembled into a response.
 
 use chrono::{DateTime, Utc};
@@ -39,7 +39,7 @@ pub struct JourneyTotals {
 /// Flat row for the drive join; split into `DriveResponse` + `VehicleResponse` after.
 #[derive(Debug, FromRow)]
 pub struct DriveRow {
-    pub segment_id: Uuid,
+    pub leg_id: Uuid,
     pub role: Option<String>,
     pub route_polyline: Option<String>,
     pub vehicle_id: Option<i64>,
@@ -50,7 +50,7 @@ pub struct DriveRow {
 }
 
 #[derive(Debug, FromRow)]
-pub struct SegmentRow {
+pub struct LegRow {
     pub id: Uuid,
     pub position: i32,
     pub mode: String,
