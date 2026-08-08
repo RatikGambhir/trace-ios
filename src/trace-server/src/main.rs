@@ -1,22 +1,28 @@
-mod error;
+//! Configuration, wiring, and serving. Everything else lives in a layer:
+//!
+//! ```text
+//! handlers/      HTTP in, status code out
+//! services/      transactions, idempotency, derived values
+//! repositories/  SQL, on a connection the caller owns
+//! models/        request and row types, and their validation
+//! core/          error shape, geometry, crypto, validation helpers, state
+//! ```
+
+mod core;
 mod handlers;
 mod models;
-mod state;
+mod repositories;
+mod router;
+mod services;
 
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Context;
-use axum::{
-    routing::{get, post},
-    Router,
-};
 use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, signal};
-use tower::ServiceBuilder;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use crate::state::AppState;
+use crate::{core::state::AppState, router::app};
 
 const DEFAULT_PORT: u16 = 8080;
 
@@ -62,25 +68,6 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Build the router. Kept separate from `main` so tests can drive it directly
-/// with `oneshot` instead of binding a port.
-fn app(state: Arc<AppState>) -> Router {
-    let api = Router::new()
-        .route("/users", post(handlers::create_user))
-        .route("/users/{id}", get(handlers::get_user));
-
-    Router::new()
-        .route("/health", get(handlers::health))
-        .route("/ready", get(handlers::ready))
-        .nest("/api/v1", api)
-        .layer(
-            ServiceBuilder::new()
-                .layer(TraceLayer::new_for_http())
-                .layer(CorsLayer::permissive()),
-        )
-        .with_state(state)
-}
-
 /// Finish in-flight requests when the platform sends SIGTERM (or on Ctrl-C locally).
 async fn shutdown_signal() {
     let ctrl_c = async {
@@ -106,81 +93,4 @@ async fn shutdown_signal() {
     }
 
     tracing::info!("shutdown signal received");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::{
-        body::Body,
-        http::{Request, StatusCode},
-    };
-    use tower::ServiceExt;
-
-    /// A pool that is never actually connected. Enough to build the router, and
-    /// enough for the routes below, which answer before touching the database.
-    fn test_state() -> Arc<AppState> {
-        Arc::new(AppState {
-            db: PgPoolOptions::new()
-                .connect_lazy("postgres://postgres@localhost/postgres")
-                .expect("the test connection string parses"),
-        })
-    }
-
-    #[tokio::test]
-    async fn health_returns_ok() {
-        let response = app(test_state())
-            .oneshot(
-                Request::builder()
-                    .uri("/health")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["status"], "healthy");
-    }
-
-    #[tokio::test]
-    async fn create_user_rejects_an_invalid_payload_before_hitting_the_database() {
-        let response = app(test_state())
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/users")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        r#"{"first_name":"","last_name":"Lovelace","password":"short"}"#,
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["error"], "validation_failed");
-        assert_eq!(body["details"].as_array().unwrap().len(), 2);
-    }
-
-    #[tokio::test]
-    async fn unknown_routes_are_not_found() {
-        let response = app(test_state())
-            .oneshot(Request::builder().uri("/nope").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
 }
