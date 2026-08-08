@@ -1,6 +1,12 @@
 import SwiftUI
 
 struct WelcomeView: View {
+    let onComplete: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var showsLogInOptions = false
+    @State private var showsPhoneSheet = false
+
     var body: some View {
         ZStack {
             LinearGradient(
@@ -14,6 +20,8 @@ struct WelcomeView: View {
                 endPoint: .bottom
             )
             .ignoresSafeArea()
+            .contentShape(Rectangle())
+            .onTapGesture(perform: collapseLogInOptions)
 
             VStack(spacing: 0) {
                 TraceBrandMark()
@@ -21,60 +29,112 @@ struct WelcomeView: View {
 
                 Spacer()
 
-                TraceGlassPanel {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text("Keep the places\nthat move you.")
-                            .font(TraceTheme.Fonts.display)
-                            .tracking(-0.6)
-                            .foregroundStyle(.white)
-                            .lineSpacing(1)
-
-                        Text("A beautiful home for every journey, memory, and mile.")
-                            .font(TraceTheme.Fonts.body)
-                            .foregroundStyle(TraceTheme.Colors.secondaryText)
-                            .lineSpacing(3)
-                            .padding(.top, 12)
-                            .padding(.bottom, TraceTheme.Spacing.large)
-
-                        NavigationLink(value: AuthenticationRoute.createAccount) {
-                            HStack {
-                                Text("Get Started")
-                                Spacer()
-                                Image(systemName: "arrow.up.right")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .frame(width: 34, height: 34)
-                                    .background(.black.opacity(0.08), in: Circle())
-                            }
-                        }
-                        .buttonStyle(TracePrimaryButtonStyle())
-
-                        NavigationLink(value: AuthenticationRoute.logIn) {
-                            HStack(spacing: 6) {
-                                Text("Already have an account?")
-                                    .foregroundStyle(.white.opacity(0.56))
-                                Text("Log In")
-                                    .foregroundStyle(.white)
-                                Image(systemName: "arrow.right")
-                                    .font(.system(size: 12, weight: .semibold))
-                            }
-                            .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(TraceTextButtonStyle())
-                        .padding(.top, 18)
-                    }
-                }
-                .padding(.horizontal, TraceTheme.Spacing.medium)
-                .padding(.bottom, 10)
+                logInActions
+                    .padding(.horizontal, TraceTheme.Spacing.large)
+                    .padding(.bottom, TraceTheme.Spacing.xxLarge)
             }
         }
         .background { LandingBackground() }
+        .sheet(isPresented: $showsPhoneSheet) {
+            PhoneLogInSheet {
+                showsPhoneSheet = false
+                onComplete()
+            }
+            .presentationDetents([.height(380)])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(TraceTheme.Colors.background)
+            .presentationCornerRadius(TraceTheme.Radius.panel)
+        }
         .toolbar(.hidden, for: .navigationBar)
-        .preferredColorScheme(.dark)
+    }
+
+    private var logInActions: some View {
+        VStack(spacing: TraceTheme.Spacing.small + TraceTheme.Spacing.xSmall) {
+            if showsLogInOptions {
+                Button(action: onComplete) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "apple.logo")
+                            .font(.system(size: 19, weight: .medium))
+                        Text("Log in with Apple ID")
+                    }
+                }
+                .buttonStyle(TraceFormButtonStyle())
+                .transition(
+                    .offset(y: 56 + TraceTheme.Spacing.small + TraceTheme.Spacing.xSmall)
+                        .combined(with: .scale(scale: 0.96, anchor: .bottom))
+                        .combined(with: .opacity)
+                )
+            }
+
+            WelcomeLogInButton(
+                showsOptions: showsLogInOptions,
+                action: handleLogInButton
+            )
+        }
+        .frame(height: 124, alignment: .bottom)
+        .animation(logInAnimation, value: showsLogInOptions)
+        .accessibilityAction(named: "Collapse login options", collapseLogInOptions)
+    }
+
+    private var logInAnimation: Animation {
+        reduceMotion
+            ? .easeOut(duration: 0.2)
+            : .spring(response: 0.48, dampingFraction: 0.86)
+    }
+
+    private func handleLogInButton() {
+        if showsLogInOptions {
+            showsPhoneSheet = true
+        } else {
+            withAnimation(logInAnimation) {
+                showsLogInOptions = true
+            }
+        }
+    }
+
+    private func collapseLogInOptions() {
+        guard showsLogInOptions else { return }
+
+        withAnimation(logInAnimation) {
+            showsLogInOptions = false
+        }
+    }
+}
+
+private struct WelcomeLogInButton: View {
+    let showsOptions: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            label
+        }
+        .buttonStyle(TraceGlassButtonStyle())
+    }
+
+    private var label: some View {
+        ZStack {
+            Text("Log In")
+                .opacity(showsOptions ? 0 : 1)
+                .scaleEffect(showsOptions ? 0.96 : 1)
+
+            HStack(spacing: 10) {
+                Image(systemName: "phone.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                Text("Log in with phone number")
+            }
+            .opacity(showsOptions ? 1 : 0)
+            .scaleEffect(showsOptions ? 1 : 0.96)
+        }
+        .font(TraceTheme.Fonts.action)
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity)
+        .frame(height: 56)
     }
 }
 
 #Preview {
     NavigationStack {
-        WelcomeView()
+        WelcomeView(onComplete: {})
     }
 }

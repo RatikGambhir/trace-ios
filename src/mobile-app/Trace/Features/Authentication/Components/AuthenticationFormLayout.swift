@@ -61,6 +61,5 @@ struct AuthenticationFormLayout<Fields: View>: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbarBackground(.hidden, for: .navigationBar)
-        .preferredColorScheme(.dark)
     }
 }

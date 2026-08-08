@@ -1,27 +1,20 @@
 import SwiftUI
 
-struct TracePrimaryButtonStyle: ButtonStyle {
+struct TraceGlassButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(TraceTheme.Fonts.action)
-            .foregroundStyle(.black)
-            .padding(.leading, 20)
-            .padding(.trailing, 11)
-            .frame(maxWidth: .infinity)
-            .frame(height: 58)
-            .background(TraceTheme.Colors.paper, in: Capsule())
-            .opacity(configuration.isPressed ? 0.82 : 1)
+            .background(
+                .ultraThinMaterial,
+                in: RoundedRectangle(cornerRadius: TraceTheme.Radius.field)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: TraceTheme.Radius.field)
+                    .stroke(.white.opacity(0.22), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.18), radius: 14, y: 8)
+            .opacity(configuration.isPressed ? 0.76 : 1)
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
-    }
-}
-
-struct TraceTextButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 14, weight: .medium))
-            .frame(minHeight: 44)
-            .opacity(configuration.isPressed ? 0.72 : 1)
     }
 }
 

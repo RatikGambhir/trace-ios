@@ -6,8 +6,8 @@ struct RootView: View {
     var body: some View {
         Group {
             switch appState.destination {
-            case .authentication:
-                AuthenticationFlowView {
+            case .authentication(let initialRoute):
+                AuthenticationFlowView(initialRoute: initialRoute) {
                     withAnimation(.easeInOut(duration: 0.3)) {
                         appState.completeAuthentication()
                     }
@@ -15,7 +15,18 @@ struct RootView: View {
                 .transition(.opacity)
 
             case .home:
-                HomeView()
+                AppShellView(
+                    onShowLogin: {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            appState.showLogin()
+                        }
+                    },
+                    onSignOut: {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            appState.signOut()
+                        }
+                    }
+                )
                     .transition(.opacity)
             }
         }
