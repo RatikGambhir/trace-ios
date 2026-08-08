@@ -236,7 +236,9 @@ src/
 │   ├── requests/      what arrives, plus the validation that checks it
 │   ├── entities/      what the database stores
 │   └── responses/     what goes back
-└── core/              error shape, geometry, crypto, validation helpers, state
+└── core/
+    ├── sql_builder/   the SQL builder the repositories query through
+    └── …              error shape, geometry, crypto, validation helpers, state
 ```
 
 Request and response types are named for the operation they belong to —
@@ -249,6 +251,60 @@ Each layer only calls the one below it. Repositories take a `&mut PgConnection`
 rather than a pool, which is what lets a journey write nine tables atomically:
 the service opens one transaction and hands the same connection to each
 repository in turn.
+
+### The SQL builder
+
+Repositories write their statements through `core::sql_builder` rather than as
+string literals with `$1`…`$16` in them. The problem with the literal form is
+narrow but real: to answer "what goes into `arrival_gate`?" you count
+placeholders in the SQL, then count `.bind()` calls underneath, and trust that
+the two lists agree. Here they are one list:
+
+```rust
+let inserted: Option<i64> = Insert::into("airlines")
+    .set("iata_code", &airline.iata_code)
+    .set("icao_code", &airline.icao_code)
+    .set("name", name)
+    .on_conflict_do_nothing(&["iata_code"])
+    .returning(&["id"])
+    .fetch_optional_scalar(conn)
+    .await?;
+```
+
+A `Select` reads the same way, and renders its clauses in SQL's order whatever
+order they were called in:
+
+```rust
+let places: Vec<PlaceResponse> = Select::from("places p")
+    .columns(&["p.id", "p.name", "a.iata_code"])
+    .left_join("airports a", "a.id = p.airport_id")
+    .where_any_of("p.id", place_ids)
+    .fetch_all(conn)
+    .await?;
+```
+
+Two rules hold it together:
+
+- **Everything that becomes SQL text is `&'static str`** — tables, columns, join
+  predicates, casts. All of them are literals in this repository's source, which
+  the compiler checks; a `String` built from a request body will not typecheck.
+  There is no escaping to get wrong because there is nothing to escape.
+- **Everything that came from outside is a bind parameter.** `Params::bind` is
+  the only thing that writes a `$n`, and it writes one only as it appends the
+  value that placeholder names. A placeholder without its argument is not
+  expressible.
+
+`RETURNING` takes the same column list a `SELECT` of that row would, so an
+insert and its read-back share one constant instead of drifting apart —
+`repositories/flights.rs` uses that for all nineteen columns of a flight.
+
+Scope is `SELECT` and `INSERT`, because that is what a journey read and write
+need. No `UPDATE`, no `DELETE`, no subqueries, no `GROUP BY`: a query that wants
+one of those is written out in SQL and handed to sqlx directly. The builder is
+worth having while it stays smaller than the SQL it replaces.
+
+Every builder can `to_sql()` itself, which is how `core/sql_builder/*_tests.rs`
+read — assert on the exact statement, no database needed.
 
 Tests sit next to the code they cover, as `<file>_tests.rs` —
 `models/requests/journey.rs` is tested by `models/requests/journey_tests.rs`,

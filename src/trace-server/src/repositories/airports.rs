@@ -4,9 +4,20 @@ use sqlx::PgConnection;
 
 use crate::{
     core::error::{unique_violation, ApiError},
+    core::sql_builder::{Insert, Select},
     models::entities::flight::ResolvedAirport,
     models::requests::flight::ValidatedAirport,
 };
+
+/// What a [`ResolvedAirport`] is made of, for the read and the insert alike.
+///
+/// DECIMAL(9,6) has no native Rust mapping in this build of sqlx, and the
+/// coordinates only ever feed a float computation — cast on the way out.
+const RESOLVED_COLUMNS: &[&str] = &[
+    "id",
+    "latitude::float8 AS latitude",
+    "longitude::float8 AS longitude",
+];
 
 /// Find the airport by IATA code, inserting it if we have never seen it.
 ///
@@ -35,34 +46,27 @@ pub async fn resolve(
         )])
     })?;
 
-    let inserted = sqlx::query_as::<_, ResolvedAirport>(
-        r#"
-        INSERT INTO airports (
-            iata_code, icao_code, name, city, country_code, latitude, longitude, timezone
-        )
-        VALUES ($1, $2, $3, $4, $5, $6::float8::numeric, $7::float8::numeric, $8)
-        ON CONFLICT (iata_code) DO NOTHING
-        RETURNING id, latitude::float8 AS latitude, longitude::float8 AS longitude
-        "#,
-    )
-    .bind(&airport.iata_code)
-    .bind(&airport.icao_code)
-    .bind(name)
-    .bind(&airport.city)
-    .bind(&airport.country_code)
-    .bind(airport.latitude)
-    .bind(airport.longitude)
-    .bind(&airport.timezone)
-    .fetch_optional(&mut *conn)
-    .await
-    .map_err(|err| {
-        unique_violation(err, |constraint| match constraint {
-            "airports_icao_code_key" => Some(format!(
-                "{field}.icao_code already belongs to a different airport"
-            )),
-            _ => None,
-        })
-    })?;
+    let inserted: Option<ResolvedAirport> = Insert::into("airports")
+        .set("iata_code", &airport.iata_code)
+        .set("icao_code", &airport.icao_code)
+        .set("name", name)
+        .set("city", &airport.city)
+        .set("country_code", &airport.country_code)
+        .set_cast("latitude", airport.latitude, "float8::numeric")
+        .set_cast("longitude", airport.longitude, "float8::numeric")
+        .set("timezone", &airport.timezone)
+        .on_conflict_do_nothing(&["iata_code"])
+        .returning(RESOLVED_COLUMNS)
+        .fetch_optional(conn)
+        .await
+        .map_err(|err| {
+            unique_violation(err, |constraint| match constraint {
+                "airports_icao_code_key" => Some(format!(
+                    "{field}.icao_code already belongs to a different airport"
+                )),
+                _ => None,
+            })
+        })?;
 
     if let Some(inserted) = inserted {
         tracing::info!(iata_code = %airport.iata_code, "inserted airport");
@@ -82,17 +86,10 @@ async fn select(
     conn: &mut PgConnection,
     iata_code: &str,
 ) -> Result<Option<ResolvedAirport>, ApiError> {
-    // DECIMAL(9,6) has no native Rust mapping in this build of sqlx, and the
-    // coordinates only ever feed a float computation — cast on the way out.
-    sqlx::query_as::<_, ResolvedAirport>(
-        r#"
-        SELECT id, latitude::float8 AS latitude, longitude::float8 AS longitude
-        FROM airports
-        WHERE iata_code = $1
-        "#,
-    )
-    .bind(iata_code)
-    .fetch_optional(conn)
-    .await
-    .map_err(ApiError::Database)
+    Select::from("airports")
+        .columns(RESOLVED_COLUMNS)
+        .where_eq("iata_code", iata_code)
+        .fetch_optional(conn)
+        .await
+        .map_err(ApiError::Database)
 }

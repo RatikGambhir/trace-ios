@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::{
     core::error::{segment_constraint_error, ApiError},
+    core::sql_builder::{Insert, Select},
     models::entities::journey::{DriveRow, Journey, JourneyTotals, LegRow},
     models::requests::journey::{
         ValidatedBooking, ValidatedDrive, ValidatedJourney, ValidatedSegment,
@@ -43,31 +44,25 @@ pub async fn insert(
         }
     }
 
-    let inserted: Option<(Uuid,)> = sqlx::query_as(
-        r#"
-        INSERT INTO journeys (
-            user_id, idempotency_key, title, description,
-            started_at, ended_at, status, visibility, metadata
+    let inserted: Option<Uuid> = Insert::into("journeys")
+        .set("user_id", journey.user_id)
+        .set("idempotency_key", &journey.idempotency_key)
+        .set("title", &journey.title)
+        .set("description", &journey.description)
+        .set("started_at", journey.started_at)
+        .set("ended_at", journey.ended_at)
+        .set("status", &journey.status)
+        .set("visibility", &journey.visibility)
+        .set_cast("metadata", &journey.metadata, "jsonb")
+        .on_conflict_do_nothing_where(
+            &["user_id", "idempotency_key"],
+            "idempotency_key IS NOT NULL",
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
-        ON CONFLICT (user_id, idempotency_key) WHERE idempotency_key IS NOT NULL
-        DO NOTHING
-        RETURNING id
-        "#,
-    )
-    .bind(journey.user_id)
-    .bind(&journey.idempotency_key)
-    .bind(&journey.title)
-    .bind(&journey.description)
-    .bind(journey.started_at)
-    .bind(journey.ended_at)
-    .bind(&journey.status)
-    .bind(&journey.visibility)
-    .bind(&journey.metadata)
-    .fetch_optional(&mut *conn)
-    .await?;
+        .returning(&["id"])
+        .fetch_optional_scalar(conn)
+        .await?;
 
-    if let Some((id,)) = inserted {
+    if let Some(id) = inserted {
         return Ok(JourneyUpsert::Created(id));
     }
 
@@ -92,14 +87,13 @@ async fn select_by_key(
     user_id: Uuid,
     key: &str,
 ) -> Result<Option<Uuid>, ApiError> {
-    let row: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM journeys WHERE user_id = $1 AND idempotency_key = $2")
-            .bind(user_id)
-            .bind(key)
-            .fetch_optional(conn)
-            .await?;
-
-    Ok(row.map(|(id,)| id))
+    Select::from("journeys")
+        .columns(&["id"])
+        .where_eq("user_id", user_id)
+        .where_eq("idempotency_key", key)
+        .fetch_optional_scalar(conn)
+        .await
+        .map_err(ApiError::Database)
 }
 
 // ---------------------------------------------------------------------------
@@ -107,43 +101,57 @@ async fn select_by_key(
 /// Assemble a journey with its segments, their endpoints, and their per-mode
 /// details. Four queries regardless of how many segments there are.
 pub async fn load(conn: &mut PgConnection, journey_id: Uuid) -> Result<JourneyResponse, ApiError> {
-    let journey = sqlx::query_as::<_, Journey>(
-        r#"
-        SELECT id, user_id, idempotency_key, title, description, started_at, ended_at,
-               status, visibility, metadata, created_at, updated_at
-        FROM journeys
-        WHERE id = $1
-        "#,
-    )
-    .bind(journey_id)
-    .fetch_optional(&mut *conn)
-    .await?
-    .ok_or(ApiError::NotFound)?;
+    let journey: Journey = Select::from("journeys")
+        .columns(&[
+            "id",
+            "user_id",
+            "idempotency_key",
+            "title",
+            "description",
+            "started_at",
+            "ended_at",
+            "status",
+            "visibility",
+            "metadata",
+            "created_at",
+            "updated_at",
+        ])
+        .where_eq("id", journey_id)
+        .fetch_optional(conn)
+        .await?
+        .ok_or(ApiError::NotFound)?;
 
-    let totals = sqlx::query_as::<_, JourneyTotals>(
-        r#"
-        SELECT segment_count, mode_count, total_distance_miles, total_duration_minutes,
-               first_departure_at, last_arrival_at
-        FROM journey_totals
-        WHERE journey_id = $1
-        "#,
-    )
-    .bind(journey_id)
-    .fetch_one(&mut *conn)
-    .await?;
+    let totals: JourneyTotals = Select::from("journey_totals")
+        .columns(&[
+            "segment_count",
+            "mode_count",
+            "total_distance_miles",
+            "total_duration_minutes",
+            "first_departure_at",
+            "last_arrival_at",
+        ])
+        .where_eq("journey_id", journey_id)
+        .fetch_one(conn)
+        .await?;
 
-    let rows = sqlx::query_as::<_, LegRow>(
-        r#"
-        SELECT id, position, mode, origin_place_id, destination_place_id,
-               started_at, ended_at, duration_minutes, distance_miles, notes, metadata
-        FROM journey_legs
-        WHERE journey_id = $1
-        ORDER BY position
-        "#,
-    )
-    .bind(journey_id)
-    .fetch_all(&mut *conn)
-    .await?;
+    let rows: Vec<LegRow> = Select::from("journey_legs")
+        .columns(&[
+            "id",
+            "position",
+            "mode",
+            "origin_place_id",
+            "destination_place_id",
+            "started_at",
+            "ended_at",
+            "duration_minutes",
+            "distance_miles",
+            "notes",
+            "metadata",
+        ])
+        .where_eq("journey_id", journey_id)
+        .order_by("position")
+        .fetch_all(conn)
+        .await?;
 
     let leg_ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
     let place_ids: Vec<i64> = rows
@@ -192,18 +200,22 @@ async fn load_places(
         return Ok(HashMap::new());
     }
 
-    let places = sqlx::query_as::<_, PlaceResponse>(
-        r#"
-        SELECT p.id, p.name, p.kind, a.iata_code, p.city, p.country_code,
-               p.latitude::float8 AS latitude, p.longitude::float8 AS longitude, p.timezone
-        FROM places p
-        LEFT JOIN airports a ON a.id = p.airport_id
-        WHERE p.id = ANY($1)
-        "#,
-    )
-    .bind(place_ids)
-    .fetch_all(conn)
-    .await?;
+    let places: Vec<PlaceResponse> = Select::from("places p")
+        .columns(&[
+            "p.id",
+            "p.name",
+            "p.kind",
+            "a.iata_code",
+            "p.city",
+            "p.country_code",
+            "p.latitude::float8 AS latitude",
+            "p.longitude::float8 AS longitude",
+            "p.timezone",
+        ])
+        .left_join("airports a", "a.id = p.airport_id")
+        .where_any_of("p.id", place_ids)
+        .fetch_all(conn)
+        .await?;
 
     Ok(places.into_iter().map(|place| (place.id, place)).collect())
 }
@@ -216,20 +228,27 @@ async fn load_flights(
         return Ok(HashMap::new());
     }
 
-    let rows = sqlx::query_as::<_, FlightResponse>(
-        r#"
-        SELECT sf.leg_id, sf.flight_id, f.airline_id, f.flight_number,
-               f.origin_airport_id, f.destination_airport_id, f.distance_miles,
-               f.scheduled_departure_at, f.scheduled_arrival_at, f.status,
-               sf.seat, sf.cabin, sf.booking_reference, sf.ticket_number
-        FROM journey_flights sf
-        JOIN flights f ON f.id = sf.flight_id
-        WHERE sf.leg_id = ANY($1)
-        "#,
-    )
-    .bind(leg_ids)
-    .fetch_all(conn)
-    .await?;
+    let rows: Vec<FlightResponse> = Select::from("journey_flights jf")
+        .columns(&[
+            "jf.leg_id",
+            "jf.flight_id",
+            "f.airline_id",
+            "f.flight_number",
+            "f.origin_airport_id",
+            "f.destination_airport_id",
+            "f.distance_miles",
+            "f.scheduled_departure_at",
+            "f.scheduled_arrival_at",
+            "f.status",
+            "jf.seat",
+            "jf.cabin",
+            "jf.booking_reference",
+            "jf.ticket_number",
+        ])
+        .join("flights f", "f.id = jf.flight_id")
+        .where_any_of("jf.leg_id", leg_ids)
+        .fetch_all(conn)
+        .await?;
 
     Ok(rows.into_iter().map(|row| (row.leg_id, row)).collect())
 }
@@ -242,18 +261,21 @@ async fn load_drives(
         return Ok(HashMap::new());
     }
 
-    let rows = sqlx::query_as::<_, DriveRow>(
-        r#"
-        SELECT sd.leg_id, sd.role, sd.route_polyline,
-               v.id AS vehicle_id, v.nickname, v.make, v.model, v.year
-        FROM journey_drives sd
-        LEFT JOIN vehicles v ON v.id = sd.vehicle_id
-        WHERE sd.leg_id = ANY($1)
-        "#,
-    )
-    .bind(leg_ids)
-    .fetch_all(conn)
-    .await?;
+    let rows: Vec<DriveRow> = Select::from("journey_drives jd")
+        .columns(&[
+            "jd.leg_id",
+            "jd.role",
+            "jd.route_polyline",
+            "v.id AS vehicle_id",
+            "v.nickname",
+            "v.make",
+            "v.model",
+            "v.year",
+        ])
+        .left_join("vehicles v", "v.id = jd.vehicle_id")
+        .where_any_of("jd.leg_id", leg_ids)
+        .fetch_all(conn)
+        .await?;
 
     Ok(rows
         .into_iter()
@@ -293,32 +315,22 @@ pub struct LegWrite<'a> {
 pub async fn insert_leg(conn: &mut PgConnection, write: &LegWrite<'_>) -> Result<Uuid, ApiError> {
     let prefix = format!("segments[{}]", write.segment.position - 1);
 
-    let (id,): (Uuid,) = sqlx::query_as(
-        r#"
-        INSERT INTO journey_legs (
-            journey_id, position, mode, origin_place_id, destination_place_id,
-            started_at, ended_at, duration_minutes, distance_miles, notes, metadata
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
-        RETURNING id
-        "#,
-    )
-    .bind(write.journey_id)
-    .bind(write.segment.position)
-    .bind(&write.segment.mode)
-    .bind(write.origin_place_id)
-    .bind(write.destination_place_id)
-    .bind(write.started_at)
-    .bind(write.ended_at)
-    .bind(write.duration_minutes)
-    .bind(write.distance_miles)
-    .bind(&write.segment.notes)
-    .bind(&write.segment.metadata)
-    .fetch_one(conn)
-    .await
-    .map_err(|err| segment_constraint_error(err, &prefix))?;
-
-    Ok(id)
+    Insert::into("journey_legs")
+        .set("journey_id", write.journey_id)
+        .set("position", write.segment.position)
+        .set("mode", &write.segment.mode)
+        .set("origin_place_id", write.origin_place_id)
+        .set("destination_place_id", write.destination_place_id)
+        .set("started_at", write.started_at)
+        .set("ended_at", write.ended_at)
+        .set("duration_minutes", write.duration_minutes)
+        .set("distance_miles", write.distance_miles)
+        .set("notes", &write.segment.notes)
+        .set_cast("metadata", &write.segment.metadata, "jsonb")
+        .returning(&["id"])
+        .fetch_one_scalar(conn)
+        .await
+        .map_err(|err| segment_constraint_error(err, &prefix))
 }
 
 /// Attach the traveller's booking to a flight segment.
@@ -328,22 +340,15 @@ pub async fn insert_flight(
     flight_id: Uuid,
     booking: &ValidatedBooking,
 ) -> Result<(), ApiError> {
-    sqlx::query(
-        r#"
-        INSERT INTO journey_flights (
-            leg_id, flight_id, seat, cabin, booking_reference, ticket_number
-        )
-        VALUES ($1, $2, $3, $4, $5, $6)
-        "#,
-    )
-    .bind(leg_id)
-    .bind(flight_id)
-    .bind(&booking.seat)
-    .bind(&booking.cabin)
-    .bind(&booking.booking_reference)
-    .bind(&booking.ticket_number)
-    .execute(conn)
-    .await?;
+    Insert::into("journey_flights")
+        .set("leg_id", leg_id)
+        .set("flight_id", flight_id)
+        .set("seat", &booking.seat)
+        .set("cabin", &booking.cabin)
+        .set("booking_reference", &booking.booking_reference)
+        .set("ticket_number", &booking.ticket_number)
+        .execute(conn)
+        .await?;
 
     Ok(())
 }
@@ -355,18 +360,13 @@ pub async fn insert_drive(
     vehicle_id: Option<i64>,
     drive: &ValidatedDrive,
 ) -> Result<(), ApiError> {
-    sqlx::query(
-        r#"
-        INSERT INTO journey_drives (leg_id, vehicle_id, role, route_polyline)
-        VALUES ($1, $2, $3, $4)
-        "#,
-    )
-    .bind(leg_id)
-    .bind(vehicle_id)
-    .bind(&drive.role)
-    .bind(&drive.route_polyline)
-    .execute(conn)
-    .await?;
+    Insert::into("journey_drives")
+        .set("leg_id", leg_id)
+        .set("vehicle_id", vehicle_id)
+        .set("role", &drive.role)
+        .set("route_polyline", &drive.route_polyline)
+        .execute(conn)
+        .await?;
 
     Ok(())
 }

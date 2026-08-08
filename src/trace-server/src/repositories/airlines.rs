@@ -4,6 +4,7 @@ use sqlx::PgConnection;
 
 use crate::{
     core::error::{unique_violation, ApiError},
+    core::sql_builder::{Insert, Select},
     models::requests::flight::ValidatedAirline,
 };
 
@@ -20,29 +21,24 @@ pub async fn resolve(conn: &mut PgConnection, airline: &ValidatedAirline) -> Res
         )])
     })?;
 
-    let inserted: Option<(i64,)> = sqlx::query_as(
-        r#"
-        INSERT INTO airlines (iata_code, icao_code, name)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (iata_code) DO NOTHING
-        RETURNING id
-        "#,
-    )
-    .bind(&airline.iata_code)
-    .bind(&airline.icao_code)
-    .bind(name)
-    .fetch_optional(&mut *conn)
-    .await
-    .map_err(|err| {
-        unique_violation(err, |constraint| match constraint {
-            "airlines_icao_code_key" => {
-                Some("airline.icao_code already belongs to a different airline".to_string())
-            }
-            _ => None,
-        })
-    })?;
+    let inserted: Option<i64> = Insert::into("airlines")
+        .set("iata_code", &airline.iata_code)
+        .set("icao_code", &airline.icao_code)
+        .set("name", name)
+        .on_conflict_do_nothing(&["iata_code"])
+        .returning(&["id"])
+        .fetch_optional_scalar(conn)
+        .await
+        .map_err(|err| {
+            unique_violation(err, |constraint| match constraint {
+                "airlines_icao_code_key" => {
+                    Some("airline.icao_code already belongs to a different airline".to_string())
+                }
+                _ => None,
+            })
+        })?;
 
-    if let Some((id,)) = inserted {
+    if let Some(id) = inserted {
         tracing::info!(iata_code = %airline.iata_code, "inserted airline");
         return Ok(id);
     }
@@ -56,10 +52,10 @@ pub async fn resolve(conn: &mut PgConnection, airline: &ValidatedAirline) -> Res
 }
 
 async fn select(conn: &mut PgConnection, iata_code: &str) -> Result<Option<i64>, ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM airlines WHERE iata_code = $1")
-        .bind(iata_code)
-        .fetch_optional(conn)
-        .await?;
-
-    Ok(row.map(|(id,)| id))
+    Select::from("airlines")
+        .columns(&["id"])
+        .where_eq("iata_code", iata_code)
+        .fetch_optional_scalar(conn)
+        .await
+        .map_err(ApiError::Database)
 }
