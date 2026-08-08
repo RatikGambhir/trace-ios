@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXFileReference section */
+		7A1B0C1D2E3F4A5B6C7D8E03 /* Trace.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Trace.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		7A1B0C1D2E3F4A5B6C7D8E01 /* Trace */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
@@ -23,10 +27,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
-
-/* Begin PBXFileReference section */
-		7A1B0C1D2E3F4A5B6C7D8E03 /* Trace.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Trace.app; sourceTree = BUILT_PRODUCTS_DIR; };
-/* End PBXFileReference section */
 
 /* Begin PBXGroup section */
 		7A1B0C1D2E3F4A5B6C7D8E04 = {
@@ -277,20 +277,20 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		7A1B0C1D2E3F4A5B6C7D8E0B /* Build configuration list for PBXProject "Trace" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				7A1B0C1D2E3F4A5B6C7D8E0C /* Debug */,
-				7A1B0C1D2E3F4A5B6C7D8E0D /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		7A1B0C1D2E3F4A5B6C7D8E07 /* Build configuration list for PBXNativeTarget "Trace" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				7A1B0C1D2E3F4A5B6C7D8E0E /* Debug */,
 				7A1B0C1D2E3F4A5B6C7D8E0F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7A1B0C1D2E3F4A5B6C7D8E0B /* Build configuration list for PBXProject "Trace" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7A1B0C1D2E3F4A5B6C7D8E0C /* Debug */,
+				7A1B0C1D2E3F4A5B6C7D8E0D /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
