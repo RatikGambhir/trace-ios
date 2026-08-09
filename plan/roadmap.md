@@ -35,7 +35,9 @@ bind address from `TRACE_SERVER_ADDR`. Two in-process router tests cover
   the feature set, and the app's model types should mirror them.
 - **Persistence** — the server has no storage. SwiftData vs. server-owned state
   vs. both, once there's data worth keeping.
-- **Auth** — none yet, and it shapes both sides.
+- **Auth** — none yet, and it shapes both sides. Identity provider vs. building
+  it into `trace-server` is worked through in [`auth.md`](auth.md), which
+  recommends the latter with Sign in with Apple as the primary method.
 
 ## Next steps
 
