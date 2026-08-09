@@ -197,6 +197,8 @@ Written as triggers, so this is re-openable on evidence rather than vibes:
 
 ### The separable decision: who sends the OTP
 
+Worked through in full in [`twilio-sms.md`](twilio-sms.md); the summary follows.
+
 RAT-5 and RAT-7 have already pointed at **Twilio Verify**, and for launch that is
 the right call, for a reason that is not price: Verify includes **Fraud Guard**,
 which blocks SMS pumping (the attack where someone farms your OTP endpoint to

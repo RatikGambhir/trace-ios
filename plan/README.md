@@ -8,5 +8,7 @@ write down what we intend to build before it lands in `src/`.
   atmosphere, star background, and markers.
 - `auth.md` — identity provider vs. custom authentication: cost, complexity,
   and what the app and server already commit us to.
+- `twilio-sms.md` — SMS for the phone login flow: Twilio's Messaging API vs.
+  Verify, A2P 10DLC, and what integrating it costs.
 
 Add one Markdown file per feature or decision as they come up.
