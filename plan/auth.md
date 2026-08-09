@@ -28,9 +28,13 @@ Worth writing down, because it narrows the field before any vendor is compared.
 number*. The phone sheet (`PhoneLogInSheet` in `LogInView.swift:82`) hardcodes
 `+1`, and gates its Continue on ≥7 digits. `CreateAccountView` collects name,
 email, and password — but nothing navigates to it; it is reachable only via the
-`-showRegister` debug launch argument (`AuthenticationFlowView.swift:15`). So
-today's design is **Apple + phone OTP, passwordless**, with an email/password
-screen built but parked.
+`-showRegister` debug launch argument (`AuthenticationFlowView.swift:15`).
+
+**Decided, 9 Aug 2026: email/password is out.** The methods are Apple ID and
+phone, and nothing else — the design is passwordless outright, not passwordless
+for now. `CreateAccountView`, `AuthenticationRoute.createAccount`, and the
+`-showRegister` branch should be deleted rather than left implying a flow we are
+not building; `TraceSecureField` goes with them unless something else claims it.
 
 **The server has signup-shaped code and no authentication.** Concretely:
 
@@ -169,9 +173,11 @@ Reasons, in the order they matter:
    deletion, and reconciled when they disagree. That is real ongoing complexity
    that the "vendor is simpler" framing hides.
 4. **The server is already shaped for it.** Layered handlers/services/repositories,
-   Argon2 wired up (`core/crypto.rs`), a SQL builder, `ApiError` ready for one
-   more variant, tests beside the code. Auth is a new vertical slice through
-   scaffolding that already exists, not new scaffolding.
+   a CSPRNG token generator (`core/crypto.rs`), a SQL builder, `ApiError` ready
+   for one more variant, tests beside the code. Auth is a new vertical slice
+   through scaffolding that already exists, not new scaffolding. (The Argon2
+   half of `crypto.rs` is the one piece that does *not* survive the passwordless
+   decision — see the migration below.)
 5. **No migration debt.** Every option needs the `users` migration and the auth
    middleware anyway. Choosing custom means we write that once, for ourselves.
 
@@ -184,10 +190,11 @@ the honest cost of the $0.
 
 Written as triggers, so this is re-openable on evidence rather than vibes:
 
-- **Email/password becomes a real flow** (i.e. `CreateAccountView` gets wired up
-  with reset + verification). Transactional email deliverability and reset-token
-  flows are exactly what IdPs are good at, and where custom auth stops being
-  cheap. → Reconsider Firebase or Supabase Auth.
+- ~~**Email/password becomes a real flow.**~~ **Retired 9 Aug 2026** — it is out.
+  This was the strongest argument for a vendor, because transactional email
+  deliverability and reset-token flows are exactly what IdPs are good at and
+  where custom auth stops being cheap. Ruling it out makes the recommendation
+  below stronger, not weaker. It comes back only if password login ever does.
 - **A third and fourth social provider** (Google, Facebook). Each is another
   OAuth integration to maintain; at three-plus, a vendor wins.
 - **Enterprise or B2B buyers** wanting SSO/SAML, or a SOC 2 questionnaire we
@@ -219,10 +226,19 @@ to a complete, tested flow, most of it in the server.
 
 **Migration `0007_add_auth.sql`**
 
-- `users`: add `phone` (E.164, unique, nullable), `email` (unique, nullable),
-  `apple_user_id` (unique, nullable — Apple's stable `sub`). Make
-  `password_hash` **nullable** — passwordless users have none.
-- A `CHECK` that at least one identity column is non-null.
+- `users`: add `phone` (E.164, unique, nullable) and `apple_user_id` (unique,
+  nullable — Apple's stable `sub`). These are the only two credentials.
+- **Drop `password_hash`.** With email/password out it is not "nullable for
+  passwordless users", it is a column nothing can ever write. Dropping it also
+  makes `hash_password` in `core/crypto.rs` dead code, and `argon2` a dependency
+  with no caller — remove both unless we decide to hash `api_key`, which is
+  currently stored in plaintext and deserves its own answer.
+- `email` (unique, nullable) is still worth keeping, but as a **profile
+  attribute, not a credential**: Sign in with Apple hands us one on first
+  authorization — often a `@privaterelay.appleid.com` address, and only that
+  once — and it is the only address we will ever have. Nothing authenticates
+  against it.
+- A `CHECK` that at least one of `phone` and `apple_user_id` is non-null.
 - `refresh_tokens`: `id`, `user_id`, `token_hash`, `issued_at`, `expires_at`,
   `revoked_at`, `replaced_by`, plus device metadata. Store a hash, never the
   token.
@@ -286,10 +302,8 @@ Not conditional on the recommendation — true for any option:
 
 ## Open questions
 
-1. **Is email/password in or out?** `CreateAccountView` exists but is unreachable.
-   If it is out, say so and delete it — the parked screen is what makes this
-   decision look closer than it is. If it is in, that changes the recommendation's
-   weighting materially (see the triggers above).
+1. ~~**Is email/password in or out?**~~ **Answered 9 Aug 2026: out.** Apple ID and
+   phone only.
 2. **International phone numbers?** The sheet hardcodes `+1`. Non-US SMS is
    dramatically more expensive per message and carries most of the fraud risk.
 3. **Does an API key survive?** `users.api_key` exists, is returned once, and
